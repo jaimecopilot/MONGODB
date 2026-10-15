@@ -251,3 +251,189 @@ Por eso, cuando estudiemos roles personalizados, no concluiremos que una cuenta 
 ### Actividad de diseño
 
 Define tres tareas: consultar una factura, registrar una venta y administrar cuentas. ¿Por qué no deberían compartir la misma identidad? Propón un rol mínimo para cada una y explica qué operación negativa ensayarías para verificarlo.
+
+
+---
+
+# Unidad 5. TLS: proteger lo que viaja por la red
+
+## 5.1. Una contraseña válida no protege por sí sola el canal
+
+Un empleado puede identificarse correctamente y tener permisos adecuados, pero si cliente y servidor intercambian datos por una conexión insegura, existe otro tipo de riesgo. La pregunta ya no es «¿quién eres?» sino «¿puede un tercero interpretar o manipular la comunicación?».
+
+**TLS** es un protocolo que protege la comunicación en tránsito y permite a un cliente verificar la identidad del servidor mediante certificados. Cuando el canal TLS se establece correctamente, los datos enviados por él quedan protegidos mediante mecanismos criptográficos adecuados para la conexión.
+
+No es un mecanismo de cifrado de los archivos almacenados en disco. Si alguien copia un volumen donde están los datos, TLS no resuelve ese problema por sí solo.
+
+## 5.2. ¿Qué aporta un certificado?
+
+Un certificado digital vincula una identidad a una clave pública y contiene información para comprobar su validez y su emisor. Se utiliza junto con una clave privada asociada, que debe protegerse.
+
+En una configuración básica:
+1. El servidor MongoDB presenta su certificado.
+2. El cliente comprueba, entre otras cosas, que confía en la autoridad que lo firmó y que el nombre del servidor coincide con los datos adecuados del certificado.
+3. Si las comprobaciones son satisfactorias, el protocolo permite establecer un canal protegido.
+4. Después siguen siendo relevantes la autenticación y la autorización necesarias para las operaciones.
+
+La verificación del nombre importa: confiar en una autoridad no debería servir para aceptar indiscriminadamente cualquier servidor que presente cualquier certificado expedido por ella.
+
+## 5.3. La función de una autoridad de certificación
+
+Una **CA** o autoridad certificadora firma certificados. Para una demostración local podemos crear una CA temporal y firmar con ella un certificado de servidor y otro de cliente.
+
+En el proyecto existe `scripts/generar-certificados.sh`, que prepara archivos de ejemplo dentro de `certs/`. Esa carpeta no se publica con claves privadas en Git. No debes copiar esa gestión simplificada de material criptográfico a una infraestructura de producción: allí se requieren procesos de custodia, renovación, revocación, permisos de archivos y confianza adecuados.
+
+El nombre `server.pem` en un ejemplo puede incluir el certificado de servidor y su clave privada. El archivo `ca.crt` permite al cliente verificar la cadena de confianza. Confundir esos dos archivos puede llevar a errores de conexión.
+
+## 5.4. «Requiere TLS» y «autenticado» no son lo mismo
+
+La instancia del laboratorio `mongo-tls` está configurada con `--tlsMode requireTLS`. Esto significa que exige el protocolo TLS para conexiones de red a esa instancia.
+
+Pero un cliente que consigue establecer un canal TLS todavía puede necesitar autenticarse para acceder a documentos protegidos. Por ejemplo, una orden de comprobación de disponibilidad `ping` puede responder sin demostrar que el cliente posee permisos para consultar datos.
+
+De aquí surge una distinción que usaremos en las prácticas:
+
+| Prueba | Qué puede demostrar | Qué NO demuestra |
+|---|---|---|
+| Conexión sin TLS rechazada | El servidor exige TLS | Que los usuarios tengan roles correctos |
+| Conexión TLS y CA válida | El canal puede establecerse y el servidor es verificable | Que el cliente pueda leer secretos |
+| Lectura autenticada permitida | La cuenta tiene permiso de lectura | Que también pueda modificar datos |
+| Inserción denegada al lector | Se aplica una restricción de escritura | Que TLS está configurado correctamente |
+
+No uses una sola prueba para afirmar que están verificadas todas las capas de seguridad.
+
+## 5.5. Qué sucede si la conexión TLS falla
+
+Los errores pueden aparecer por razones diferentes:
+- No se pasó `--tls` aunque el servidor lo exige.
+- El cliente no confía en la autoridad que firmó el certificado.
+- El certificado está caducado o no es válido para el nombre solicitado.
+- El archivo de clave/certificado es incorrecto o no puede leerse.
+- La configuración de servidor y cliente no tiene opciones compatibles.
+
+La forma pedagógica de resolverlo no consiste en añadir opciones de «no validar certificados» hasta que funcione. Eso desactiva precisamente una propiedad que queremos aprender a conservar.
+
+---
+
+# Unidad 6. X.509: identificar al cliente por su certificado
+
+## 6.1. La misma palabra «certificado», dos usos
+
+Hasta ahora el certificado servía principalmente para que el cliente verificara al servidor al establecer TLS. MongoDB también puede utilizar certificados de **cliente** para autenticar identidades mediante el mecanismo `MONGODB-X509`.
+
+Son dos preguntas distintas:
+- **¿Es legítimo este servidor?** El cliente verifica el certificado presentado por el servidor en la conexión TLS.
+- **¿Quién es este cliente?** El servidor puede autenticarlo utilizando la identidad indicada por un certificado del cliente, cuando está configurado para ello.
+
+No basta con tener un archivo `.pem`. Hay que entender si corresponde al servidor o al cliente, si está firmado por una CA de confianza, qué nombre representa y qué privilegios tiene esa identidad dentro de MongoDB.
+
+## 6.2. Nombre distinguido y base $external
+
+La identidad de un certificado X.509 se expresa mediante campos de un **nombre distinguido** (*Distinguished Name* o DN). En el laboratorio se utiliza un sujeto de demostración similar a:
+
+```text
+CN=alumno-x509,OU=Alumnos,O=MongoDBFormacion
+```
+
+Ese sujeto no es una contraseña; identifica la entidad representada por el certificado. MongoDB utiliza la base especial `$external` para identidades autenticadas con mecanismos externos como X.509.
+
+La cuenta de certificado necesita roles, igual que una cuenta basada en contraseña. Que el cliente demuestre poseer una clave privada válida no le concede automáticamente permiso para modificar cualquier colección.
+
+## 6.3. Una prueba completa
+
+Para demostrar X.509 de manera rigurosa, el laboratorio deberá verificar estas condiciones:
+
+1. Se ha creado una CA local y un certificado de servidor válido para los nombres usados en la conexión.
+2. La instancia se inicia exigiendo TLS.
+3. Un cliente puede verificar la CA y establecer el canal.
+4. Se registra el DN del alumno como usuario de `$external` con un rol de lectura sobre `curso_cert`.
+5. El cliente se conecta con su certificado y el mecanismo `MONGODB-X509`.
+6. La cuenta puede leer el documento de prueba.
+7. La misma identidad recibe una denegación cuando intenta insertar.
+
+La última prueba es importante: vuelve a demostrar que **autenticación y autorización están separadas**.
+
+## 6.4. ¿X.509 está disponible en Community?
+
+La autenticación X.509 de clientes puede demostrarse en MongoDB Community 8.0. Esto no significa que todas las funciones empresariales de identidad, auditoría y cifrado de MongoDB estén presentes en Community. Hay que verificar las capacidades concretas, no inferirlas por la mera presencia de TLS o certificados.
+
+---
+
+# Unidad 7. LDAP, cifrado en reposo y controles operativos
+
+## 7.1. LDAP: qué necesidad atendía
+
+En organizaciones grandes, gestionar cuentas individuales por separado en cada sistema puede resultar complejo. Los directorios centralizados permiten que distintas aplicaciones se integren con una infraestructura común de identidades y grupos.
+
+LDAP es un protocolo utilizado históricamente en esos entornos. MongoDB ofrece capacidades de integración empresarial, pero en MongoDB 8.0 la integración LDAP está marcada como obsoleta. **No la vamos a representar como un laboratorio ejecutable sobre nuestra imagen Community.**
+
+Para un alumno principiante, la lección no es aprender a configurar un servidor LDAP ficticio a base de comandos que fallarán. Es distinguir:
+- Cuentas locales de una base MongoDB.
+- Autenticación mediante un directorio corporativo.
+- Autorización mediante roles que deben seguir definirse apropiadamente.
+
+La integración con identidad corporativa puede facilitar administración centralizada, pero no elimina la necesidad de diseñar permisos de acceso a datos.
+
+## 7.2. Cifrado en reposo: otra superficie de amenaza
+
+Ya aprendimos que TLS protege datos en tránsito. ¿Qué ocurre cuando MongoDB escribe archivos en un disco o un volumen? Si una copia del almacenamiento cae en manos no autorizadas, podemos necesitar cifrado **en reposo**.
+
+Hay mecanismos diferentes que no deben confundirse:
+
+1. **Cifrado del sistema de archivos, disco o volumen:** depende del sistema operativo o proveedor de almacenamiento. Puede proteger bloques almacenados según su configuración y gestión de claves.
+2. **Cifrado nativo en reposo de MongoDB autogestionado:** mecanismo propio de determinadas ediciones empresariales, con requisitos de configuración y gestión de claves.
+3. **Cifrado a nivel de campo o aplicación:** puede atender necesidades específicas de datos sensibles y modelos de acceso; requiere un diseño diferente.
+
+Un volumen Docker no es una garantía de cifrado. Que la aplicación conecte por TLS no demuestra que los archivos locales estén cifrados.
+
+## 7.3. Protección de secretos
+
+Las contraseñas y las claves privadas no deberían colocarse dentro del código de ejemplos destinado a publicarse. Para un laboratorio efímero se puede utilizar un archivo `.env` ignorado por Git y certificados temporales generados localmente. Esa solución simplifica la clase, pero no representa una política completa de secretos para producción.
+
+Una empresa necesita decisiones sobre custodia, rotación, acceso, revocación y recuperación de claves. Un archivo de certificado válido pero mal protegido puede ser una vía de acceso no autorizado.
+
+## 7.4. Copias de seguridad y restauración
+
+La seguridad también incluye **disponibilidad e integridad**. Una copia de seguridad no sirve de mucho si nadie ha comprobado que puede restaurarla. Las copias deben protegerse frente a lectura y modificación no autorizadas, y deben encajar con los objetivos de recuperación de la organización.
+
+La clase no realizará una auditoría de continuidad de negocio, pero debes comprender la diferencia entre:
+- Tener una copia que alguien dice haber creado.
+- Tener una copia verificada mediante una restauración.
+- Tener procedimientos para recuperar el servicio y controlar quién puede acceder a las copias.
+
+## 7.5. Registros y auditoría de operaciones
+
+Los mensajes de `mongod` ayudan a investigar errores de inicio, fallos de conexión y otros sucesos operativos. No equivalen por sí solos a un sistema completo de auditoría empresarial que registre todas las acciones con el alcance exigido por una política regulatoria.
+
+No confundas:
+- Un log que dice «el servidor se inició».
+- Una prueba que muestra que una operación fue denegada.
+- Una política de auditoría que demuestra qué actores realizaron acciones sensibles a lo largo del tiempo.
+
+La primera es un dato de operación, la segunda es una prueba de permisos y la tercera exige mecanismos, configuración y conservación de evidencias específicos.
+
+## 7.6. Una arquitectura segura se defiende por capas
+
+Para cerrar el capítulo, imagina una aplicación de ventas con dos cuentas: una para consultar y otra para registrar pedidos. La base contiene información personal y debe estar protegida ante conexiones externas no deseadas.
+
+Una respuesta responsable incluiría:
+- limitar el acceso a los puertos según necesidades reales;
+- exigir identidad a las cuentas;
+- aplicar mínimo privilegio a cada proceso;
+- proteger comunicaciones con TLS;
+- gestionar secretos y certificados con procedimientos adecuados;
+- estudiar el cifrado del almacenamiento y las copias;
+- supervisar errores y operaciones sensibles;
+- comprobar restauraciones y actualizar el software cuando corresponda.
+
+Ninguna medida sustituye por completo a las otras. La seguridad no es un único interruptor de «activado».
+
+### Preguntas de cierre
+
+1. Una conexión a través de TLS funciona, pero el cliente no puede insertar. ¿Qué control debes investigar?
+2. Un administrador ha escrito una contraseña en un script publicado. ¿Qué riesgo existe aunque la base requiera autenticación?
+3. ¿Por qué el cifrado de un volumen no equivale automáticamente a cifrar cada dato antes de enviarlo a la aplicación?
+4. ¿Qué demostrarías con una prueba positiva y negativa de `lectorlab`?
+5. ¿Por qué no sería correcto afirmar que la práctica ha validado LDAP o el cifrado nativo en reposo en Community?
+
+La práctica avanzada comenzará comprobando TLS como canal, continuará con la identidad X.509 y terminará con una operación de lectura permitida y una escritura denegada. Los detalles empresariales se estudiarán como arquitectura, no como resultados inventados.
