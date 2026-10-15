@@ -72,8 +72,8 @@ def build(src, target):
     if any(float(page.mediabox.width)<580 or float(page.mediabox.width)>620 for page in pdf.pages):
         raise RuntimeError("Formato no A4 en "+str(target))
     text="".join((page.extract_text() or "") for page in pdf.pages)
-        if len(text)<len(re.sub(r"(?s)"+chr(96)+chr(96)+chr(96)+r".*?"+chr(96)+chr(96)+chr(96),"",raw))*0.42:
-            raise RuntimeError("Posible perdida sustancial de texto en PDF "+str(target))
+    if len(text)<len(re.sub(r"(?s)"+chr(96)+chr(96)+chr(96)+r".*?"+chr(96)+chr(96)+chr(96),"",raw))*0.42:
+        raise RuntimeError("Posible perdida sustancial de texto en PDF "+str(target))
     print(f"[OK] {target} - {n} paginas - {len(raw.split())} palabras",flush=True)
     return n
 
