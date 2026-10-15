@@ -66,17 +66,17 @@ Con la conexión administrativa:
 ```javascript
 curso.createUser({
   user:"lectorlab",
-  pwd:passwordPrompt(),
+  pwd:process.env.LAB_READER_PASSWORD,
   roles:[{role:"read",db:"curso_seguridad"}]
 })
 ```
 
-Introduce la contraseña reservada para el lector. Después:
+El ejemplo obtiene la contraseña reservada al lector desde las variables del contenedor que Compose carga de `.env`, y evita escribir la clave en la guía. Después:
 
 ```javascript
 curso.createUser({
   user:"escritorlab",
-  pwd:passwordPrompt(),
+  pwd:process.env.LAB_WRITER_PASSWORD,
   roles:[{role:"readWrite",db:"curso_seguridad"}]
 })
 ```
@@ -640,12 +640,12 @@ Si el comando informa de que el rol ya existe, seguramente repetiste el laborato
 ```javascript
 s.createUser({
   user:"auditorclase",
-  pwd:passwordPrompt(),
+  pwd:process.env.LAB_READER_PASSWORD,
   roles:[{role:"soloSecretosClase",db:"curso_seguridad"}]
 });
 ```
 
-Introduce una contraseña **exclusiva del ejercicio**. No utilices la de `adminlab` ni la escribas en el documento que entregarás.
+Para simplificar un entorno docente, esta identidad de demostración reutiliza el **valor ficticio local** `LAB_READER_PASSWORD` del contenedor. En producción se utilizarían credenciales independientes; nunca compartas una contraseña entre cuentas reales.
 
 Si la cuenta ya existe, examina `s.getUser("auditorclase")`. No confundas un error por duplicidad de nombre con un error de permisos.
 
@@ -725,12 +725,12 @@ En una sesión administrativa como en el laboratorio anterior:
 const s = db.getSiblingDB("curso_seguridad");
 s.createUser({
   user:"temporalclase",
-  pwd:passwordPrompt(),
+  pwd:process.env.LAB_READER_PASSWORD,
   roles:[{role:"read",db:"curso_seguridad"}]
 });
 ```
 
-Su estado inicial es claro: puede consultar, pero no escribir.
+Su estado inicial es claro: puede consultar, pero no escribir. La contraseña de esta cuenta de demostración procede de `LAB_READER_PASSWORD`; no utilices ese patrón para cuentas reales.
 
 ### Paso 2. Verificar antes de cambiar nada
 
