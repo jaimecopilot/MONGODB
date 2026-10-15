@@ -685,3 +685,213 @@ En cuanto al almacenamiento:
 No entregaría únicamente una lista de diez comandos. Entregaría una **matriz de identidades y permisos**, una descripción de conexiones seguras, un listado de pruebas positivas y negativas y un diagnóstico de los controles no ensayados. La conclusión debe corresponder a la evidencia real.
 
 **Una instalación de laboratorio que supera SCRAM, RBAC y X.509 no queda automáticamente certificada para producción.** Haber aprendido los mecanismos fundamentales permite formular mejores preguntas, no sustituye una evaluación de seguridad del sistema completo.
+
+
+---
+
+# Unidad 13 — La seguridad de los datos incluye recuperarlos después de un fallo
+
+## 13.1. Un sistema puede estar protegido frente a intrusos y perder todos sus datos
+
+Imagina un servidor que exige autenticación, utiliza TLS y tiene los roles correctamente definidos. Una persona autorizada comete un error y elimina una colección. O falla un disco. O un proceso defectuoso modifica muchos documentos.
+
+La autenticación y el cifrado no restauran los datos por sí solos. Por eso en seguridad también hablamos de **disponibilidad**, **integridad** y **recuperación**, además de confidencialidad.
+
+Estos tres términos pueden explicarse con ejemplos:
+
+- **Confidencialidad:** alguien sin permisos no debe poder leer la dirección de un cliente.
+- **Integridad:** una venta no debe modificarse silenciosamente por un actor no autorizado; sus datos deben conservar coherencia.
+- **Disponibilidad:** la empresa necesita seguir accediendo a su información o recuperarla dentro de un plazo aceptable.
+
+Un índice único puede proteger una regla de integridad, pero no sustituye una copia de seguridad. Un certificado TLS puede proteger el canal, pero tampoco puede reconstruir una colección eliminada.
+
+## 13.2. Qué significa tener una copia válida
+
+Una **copia de seguridad** es un conjunto de datos preservado para permitir recuperación. Pero «tener un archivo» no demuestra que podremos restaurarlo correctamente.
+
+Para una base de datos en uso, hay que responder:
+1. ¿Cuándo se tomó la copia y qué cambios posteriores quedarían fuera?
+2. ¿Es coherente con las operaciones que estaban ocurriendo?
+3. ¿Quién puede acceder a ella?
+4. ¿Dónde se almacena y cómo se protege?
+5. ¿Se ha ensayado alguna vez la restauración?
+6. ¿Cuánto tiempo tardaríamos en recuperar el servicio?
+
+Estos factores determinan si el plan de recuperación realmente sirve al negocio.
+
+### RPO y RTO sin fórmulas innecesarias
+
+**RPO** (*Recovery Point Objective*) expresa la cantidad máxima de datos recientes que una organización puede aceptar perder, medida normalmente como tiempo. Si se tolera una hora, la estrategia debe garantizar una recuperación compatible con ese requisito.
+
+**RTO** (*Recovery Time Objective*) expresa cuánto tiempo se tolera hasta recuperar la operación. Una copia guardada en otro continente puede cumplir requisitos de protección ante determinados fallos, pero quizá no permita restaurar el servicio dentro del plazo esperado.
+
+Los dos objetivos se relacionan, pero no son el mismo:
+- RPO: **¿hasta qué momento podemos recuperar los datos?**
+- RTO: **¿cuánto tardaremos en volver a funcionar?**
+
+En una práctica introductoria no necesitamos diseñar una infraestructura completa de alta disponibilidad, pero sí reconocer por qué «la copia se creó ayer» es información insuficiente.
+
+## 13.3. Restaurar no significa sobrescribir sin pensar
+
+En producción, una restauración puede afectar a operaciones recientes y a otros servicios que utilizan la base. No se debe restaurar directamente sobre datos reales solo para comprobar si una copia funciona.
+
+Una comprobación prudente utiliza un entorno aislado, datos de prueba y criterios de validación:
+- se pueden abrir las colecciones esperadas;
+- los documentos de control tienen valores conocidos;
+- se han recuperado índices y estructuras necesarias o está documentado cómo reconstruirlos;
+- las identidades y credenciales sensibles se gestionan correctamente;
+- las aplicaciones pueden reanudar sus consultas sin introducir inconsistencias.
+
+**No confundas una restauración técnica que termina sin error con la aceptación del sistema completo.** Las personas responsables necesitan saber si los datos restaurados son correctos para el negocio.
+
+## 13.4. Seguridad de las copias
+
+Una copia puede contener información tan sensible como la base original. Si alguien descarga un archivo completo sin restricciones, podría eludir la autenticación que protege al servidor activo.
+
+Por eso se deben estudiar permisos sobre almacenamiento, cifrado, gestión de claves, acceso administrativo, retención y eliminación segura. No basta con poner `--auth` al servidor en funcionamiento si los archivos de respaldo quedan públicamente disponibles.
+
+### Pregunta de aplicación
+
+Una empresa exige que nadie pueda leer los pedidos sin autorización y tiene MongoDB correctamente configurado. Sin embargo, guarda copias sin proteger en una carpeta accesible a cualquier empleado.
+
+¿Qué ha fallado? No necesariamente SCRAM. Ha fallado la protección del **otro lugar donde residen los mismos datos**.
+
+---
+
+# Unidad 14 — Separar redes, identidades y permisos en una arquitectura de aplicación
+
+## 14.1. Tres componentes, tres responsabilidades
+
+Imagina una aplicación web de ventas:
+- Un navegador de cliente envía peticiones a un servidor web.
+- El servidor web consulta y modifica datos en MongoDB.
+- Una consola administrativa se utiliza solamente para tareas autorizadas de mantenimiento.
+
+El navegador **no necesita conocer la contraseña de MongoDB** ni conectarse directamente al servidor de datos. La aplicación puede ofrecer funciones de negocio sin exponer sus credenciales internas a cada cliente.
+
+Representación conceptual:
+
+```text
+NAVEGADOR DEL CLIENTE
+          |
+          | peticiones de la aplicación
+          v
+SERVIDOR WEB
+   |          |
+   |          | identidad de servicio con permisos mínimos
+   v          |
+MONGODB <-----+
+          ^
+          |
+CONSOLA ADMINISTRATIVA
+   identidad distinta
+```
+
+Este dibujo simplifica las redes reales. Su propósito es demostrar que distintos actores necesitan distintos canales e identidades.
+
+## 14.2. No compartir la cuenta administrativa
+
+Una aplicación que utiliza siempre el usuario `adminlab` puede funcionar. Pero si una consulta está mal construida, una biblioteca vulnerable o una credencial acaba expuesta, el atacante potencialmente obtiene capacidades muy superiores a las necesarias.
+
+La elección correcta comienza por enumerar operaciones:
+- ¿Necesita leer?
+- ¿Necesita insertar?
+- ¿Necesita actualizar determinados campos?
+- ¿Necesita borrar?
+- ¿Necesita crear usuarios o roles? Probablemente no, salvo un servicio específico de administración.
+
+A partir de ahí se asigna una identidad y el conjunto mínimo de acciones.
+
+## 14.3. Una cuenta por responsabilidad facilita revocar
+
+Supongamos que el servicio de importación deja de utilizarse. Si comparte credenciales con la aplicación principal, revocarlo puede romper la aplicación. Si tiene identidad propia, es posible retirar su acceso sin afectar a otros servicios.
+
+La separación también facilita investigar errores: saber qué proceso ejecutó una acción suele ser más difícil cuando todos utilizan el mismo usuario administrativo.
+
+No estamos afirmando que cada microoperación requiera una identidad diferente. La granularidad debe justificar el coste de gestionarla. El principio es **no compartir privilegios elevados sin necesidad**.
+
+## 14.4. La red y los roles actúan en niveles distintos
+
+Un cortafuegos o una configuración de red pueden impedir que una conexión llegue al puerto de MongoDB. El control de acceso de MongoDB decide qué puede hacer una identidad que sí ha llegado y se ha autenticado.
+
+Son medidas complementarias. Un usuario de una red autorizada no debería recibir automáticamente permisos para escribir en todas las colecciones. A la inversa, una contraseña válida no debería hacer accesible un servidor a través de cualquier red por defecto.
+
+En el laboratorio los puertos publicados están limitados a `127.0.0.1`. Es una elección adecuada para ejercicios locales, no una recomendación universal de arquitectura en producción. En una instalación real se definen redes privadas, reglas de acceso, identidad y monitorización según el despliegue.
+
+## 14.5. El peligro de activar atajos durante pruebas
+
+Hay atajos que facilitan una demostración y empeoran la seguridad:
+- publicar MongoDB en todas las interfaces sin revisar quién alcanza el puerto;
+- desactivar la validación de certificados TLS cuando falla la configuración;
+- otorgar `root` a una aplicación lectora;
+- guardar una contraseña en un repositorio para evitar introducirla;
+- eliminar volúmenes para borrar un error sin comprender sus consecuencias.
+
+Un buen laboratorio debe mostrar **cómo resolver correctamente** cada fallo. Si el alumno aprende que un error se soluciona desactivando controles, habrá aprendido una práctica dañina.
+
+---
+
+# Unidad 15 — Privilegios efectivos, usuarios heredados y prueba del mínimo privilegio
+
+## 15.1. Los nombres de los roles no son pruebas de seguridad
+
+Una cuenta puede llamarse `auditor`, `lector` o `visitante` y, sin embargo, tener más privilegios de los previstos. El nombre de la cuenta no concede ni restringe nada por sí solo.
+
+Los privilegios efectivos dependen de los roles asignados, de los roles que esos roles puedan heredar y de los recursos sobre los que se autorizan acciones. Por eso un administrador debe inspeccionar las definiciones reales y no confiar en nombres amigables.
+
+En los laboratorios comenzamos por `read` y `readWrite` porque son fáciles de comparar. Después se puede crear un rol propio que permita `find` únicamente sobre una colección específica.
+
+## 15.2. Una cuenta puede acumular roles
+
+Imagina una cuenta inicialmente autorizada a leer. Más adelante se le añade temporalmente un rol de escritura para corregir datos. Si nadie retira ese permiso, la cuenta conserva una capacidad superior a la necesidad original.
+
+Es una forma de **deriva de privilegios**: los accesos se amplían con el tiempo, pero no se revisan ni eliminan.
+
+Un proceso responsable contempla:
+- justificar cada concesión;
+- registrar por qué y durante cuánto tiempo se necesita;
+- revisar los privilegios efectivos;
+- retirar permisos al terminar la tarea;
+- volver a probar una acción que deba ser denegada.
+
+La comprobación negativa es tan importante como la positiva: si la cuenta ya no necesita escribir, el servidor debe rechazar su siguiente intento.
+
+## 15.3. Una consulta no es un permiso de toda la base
+
+Con un rol propio, podemos autorizar `find` sobre una colección y denegar esa misma acción sobre otra. Este es un nivel más preciso que `read` para toda una base.
+
+Ejemplo conceptual:
+
+```javascript
+privileges: [
+  {
+    resource: {
+      db: "curso_seguridad",
+      collection: "secretos"
+    },
+    actions: ["find"]
+  }
+]
+```
+
+La expresión indica explícitamente **dónde** y **qué acción** se permite. No significa que la cuenta tenga automáticamente todas las operaciones sobre `curso_seguridad` ni que pueda administrar otras bases.
+
+## 15.4. ¿Cómo comprobarlo con evidencias?
+
+Para ese rol:
+1. Consulta un documento de `secretos` y comprueba que aparece.
+2. Intenta insertar en `secretos` y comprueba que se deniega.
+3. Intenta leer otra colección de la misma base y comprueba que se deniega, si el rol no la incluye.
+4. Comprueba que la cuenta no tiene otros roles que amplíen accidentalmente esos permisos.
+
+Una única operación permitida **no basta** para demostrar el límite. La política debe comprobarse con operaciones que la cruzan.
+
+## 15.5. Identidad, sesión y cambios de privilegios
+
+Cuando cambian los roles o las contraseñas, las conexiones que ya existen pueden presentar situaciones distintas de las nuevas sesiones según el mecanismo y momento de evaluación. Por eso las prácticas de modificación de roles vuelven a conectar antes de verificar el resultado.
+
+No asumas que toda aplicación en producción refresca inmediatamente cada sesión cuando se retira un permiso. Define procedimientos y pruebas apropiadas para el despliegue concreto.
+
+### Conclusión de la unidad
+
+Una política de mínimo privilegio no se demuestra mostrando una tabla de roles ideal. Se demuestra con identidades concretas, recursos concretos, acciones permitidas y acciones rechazadas, y con un proceso para revisar los permisos cuando cambian las necesidades.
