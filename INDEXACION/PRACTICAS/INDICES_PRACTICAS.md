@@ -2257,3 +2257,273 @@ Si tu aplicación necesita indexar muchas relaciones complejas, quizá debas rec
 3. ¿Por qué indexar una consulta incorrecta no arregla su significado?
 4. ¿Por qué un multikey puede examinar más claves que documentos?
 5. ¿Qué comprobarías antes de crear un índice compuesto que involucre varios arrays?
+
+
+---
+
+# Laboratorio 19 — ¿Qué índices existen, cuánto ocupan y se han utilizado?
+
+## Un índice no vale por existir
+
+Has aprendido a crear índices, pero un administrador también debe revisar si continúan siendo necesarios. Un índice puede ocupar espacio y mantenerse en cada escritura sin aportar utilidad significativa a las consultas reales.
+
+En este ejercicio inspeccionaremos **definiciones, tamaño y contadores de uso**. No confundiremos esas observaciones con una decisión automática de borrar índices: una consulta muy importante puede ejecutarse pocas veces, y los contadores pueden reiniciarse.
+
+### Paso 1. Comprobar la colección
+
+En una terminal:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
+```
+
+En `mongosh`:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
+```
+
+Debe aparecer el volumen que cargaste. Si no hay documentos, la información sobre tamaño y uso será poco representativa.
+
+### Paso 2. Enumerar los índices
+
+```javascript
+c.getIndexes()
+```
+
+Para cada índice anota el nombre, la clave y opciones relevantes. Debes distinguir `_id_`, que MongoDB crea para el identificador del documento, de los índices secundarios creados en los laboratorios.
+
+### Paso 3. Examinar tamaños de índices
+
+```javascript
+const estadisticas = c.stats();
+printjson(estadisticas.indexSizes)
+```
+
+La propiedad `indexSizes` presenta información de tamaño por índice en el contexto de esas estadísticas. No interpretes una cifra sin sus unidades y sin conocer el conjunto de datos.
+
+¿Qué esperas observar si comparas una colección pequeña con otra que tiene un millón de documentos? No puedes prometer una proporción exacta, pero en general almacenar más entradas de índice requiere recursos adicionales.
+
+### Paso 4. Consultar estadísticas de acceso
+
+```javascript
+c.aggregate([{$indexStats:{}}]).toArray()
+```
+
+Esta etapa proporciona información sobre acceso a índices en el contexto de la instancia y su periodo de observación. Los contadores no son una prueba perfecta de utilidad a largo plazo: pueden reiniciarse por procesos del servidor y reflejan el trabajo observado durante una ventana.
+
+**Precaución:** un índice con cero accesos desde el último reinicio no tiene por qué ser inútil. Tal vez ayuda a una consulta mensual crítica que no se ejecutó durante la prueba.
+
+### Paso 5. Generar actividad conocida
+
+```javascript
+c.find({numero:1}).toArray()
+c.find({numero:100}).toArray()
+c.find({clienteId:809}).limit(10).toArray()
+```
+
+Vuelve a consultar `$indexStats`. Observa si aparecen accesos en los índices que el motor utilizó. Puedes contrastar el plan de cada consulta con `explain` para no atribuir todos los accesos al índice que imaginas.
+
+### Paso 6. Comparar coste y utilidad
+
+Un índice tiene, como mínimo, tres dimensiones:
+- **Lectura:** cuánto ayuda a los patrones de consulta importantes.
+- **Escritura:** cuánto trabajo agrega al actualizar documentos y claves.
+- **Almacenamiento:** cuánto espacio consume.
+
+No existe una regla general que permita sumar esas dimensiones sin conocer el uso real de la aplicación. Debes justificar por qué merece mantenerse cada estructura.
+
+### Paso 7. Elaborar una recomendación
+
+Elige un índice del laboratorio y completa:
+
+| Pregunta | Respuesta |
+|---|---|
+| Nombre y campos | ____ |
+| Consulta de negocio que atiende | ____ |
+| Plan observado | ____ |
+| Espacio observado | ____ |
+| Frecuencia o importancia conocida | ____ |
+| Riesgo de retirarlo | ____ |
+
+El informe debe poder leerlo otra persona y entender que **no propones borrar índices solo porque parecen grandes**.
+
+---
+
+# Laboratorio 20 — Restricciones de datos opcionales: cuándo unique general no representa la regla correcta
+
+## El problema
+
+Una empresa admite cuentas que aún no han proporcionado correo electrónico. Las cuentas que tienen correo deben utilizarlo de manera única. Una persona propone simplemente crear un índice único sobre `email` para toda la colección.
+
+Antes de ejecutar el comando debemos estudiar la diferencia entre:
+- el campo está presente con un correo válido;
+- el campo existe con valor `null`;
+- el campo está ausente.
+
+La decisión de negocio es: **permitimos muchos registros sin correo, pero no queremos dos cuentas con el mismo correo real**.
+
+### Paso 1. Crear datos opcionales
+
+En `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.correos_opcionales_clase.drop();
+d.correos_opcionales_clase.insertMany([
+  {_id:1,nombre:"Alumno A"},
+  {_id:2,nombre:"Alumno B"},
+  {_id:3,nombre:"Alumno C",email:"c@ejemplo.test"}
+]);
+```
+
+Tenemos dos alumnos sin `email` y uno con dirección válida. La colección se ha diseñado para esta práctica; no modifica datos empresariales.
+
+### Paso 2. Pensar antes de crear unique
+
+¿Qué pasaría si aplicamos una restricción de unicidad general al campo `email`? Debemos estudiar cómo MongoDB trata la ausencia del campo y `null` bajo ese tipo de índice.
+
+No demos por hecho que «campo ausente» queda siempre libre de restricciones. La semántica de los índices únicos necesita comprenderse.
+
+### Paso 3. Crear un índice parcial que represente la regla
+
+Una forma de expresar «aplicar la restricción a correos de tipo cadena» es:
+
+```javascript
+d.correos_opcionales_clase.createIndex(
+  {email:1},
+  {
+    name:"ix_email_texto_unico",
+    unique:true,
+    partialFilterExpression:{email:{$type:"string"}}
+  }
+)
+```
+
+Este índice solo incluye los documentos que cumplen el filtro declarado. En el ejemplo, los alumnos sin correo no forman parte del conjunto de claves sujetas a esa restricción.
+
+### Paso 4. Insertar otro alumno sin correo
+
+```javascript
+d.correos_opcionales_clase.insertOne({_id:4,nombre:"Alumno D"})
+```
+
+**Resultado esperado:** inserción permitida. La condición parcial no obliga a que todos tengan `email`.
+
+### Paso 5. Intentar un correo duplicado
+
+```javascript
+d.correos_opcionales_clase.insertOne({
+  _id:5,
+  nombre:"Alumno E",
+  email:"c@ejemplo.test"
+})
+```
+
+**Resultado esperado:** rechazo por clave duplicada. El correo `c@ejemplo.test` ya pertenece al alumno C.
+
+### Paso 6. Interpretar la regla real
+
+El índice no verifica que una cadena parezca un correo electrónico sintácticamente correcto. Por ejemplo, podría aceptar `email:"hola"` si es distinto. **Validar el formato y aplicar unicidad son responsabilidades diferentes**. La aplicación o el modelo de datos debe decidir qué valores son admisibles.
+
+### Paso 7. Preguntas de comprobación
+
+1. ¿Por qué dos documentos sin `email` pueden ser válidos para este negocio?
+2. ¿Qué diferencia hay entre no tener correo y repetir un correo real?
+3. ¿Por qué necesitamos `partialFilterExpression`?
+4. ¿Qué función no cumple este índice aunque sea unique?
+5. ¿Qué cambiaría si la empresa declarase `email` obligatorio para todas las cuentas?
+
+### Conclusión
+
+Un buen índice expresa una necesidad concreta. El principio no es «crear unique siempre que el campo parezca importante», sino **comprender la regla de negocio y comprobar los casos que debe permitir y prohibir**.
+
+---
+
+# Laboratorio 21 — Resolver un error de creación de índice sin perder datos
+
+## Caso de soporte
+
+Un alumno intenta crear un índice único y recibe un error. Decide borrar la colección y volver a empezar. Esa reacción puede ocultar el problema y, en una base real, destruir información valiosa.
+
+Vamos a aprender un procedimiento controlado para **diagnosticar por qué una estructura no puede crearse**.
+
+### Paso 1. Preparar una colección con un problema deliberado
+
+Dentro de `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.duplicados_clase.drop();
+d.duplicados_clase.insertMany([
+  {_id:1,codigo:"A"},
+  {_id:2,codigo:"B"},
+  {_id:3,codigo:"A"}
+]);
+```
+
+El código A aparece en dos documentos. Eso sería una violación de la regla «cada código debe ser único».
+
+### Paso 2. Intentar imponer una regla incompatible
+
+```javascript
+d.duplicados_clase.createIndex(
+  {codigo:1},
+  {unique:true,name:"ix_codigo_unico"}
+)
+```
+
+**Resultado esperado:** error de duplicidad. MongoDB no puede declarar que el conjunto cumple unicidad cuando los datos existentes ya la contradicen.
+
+El error no demuestra que Docker esté mal ni que MongoDB no admita índices unique.
+
+### Paso 3. Localizar la contradicción
+
+```javascript
+d.duplicados_clase.find({codigo:"A"}).toArray()
+```
+
+Deben aparecer los documentos uno y tres. No los borres todavía: primero entiende **qué dato contradice la regla**.
+
+### Paso 4. Elegir una resolución de negocio
+
+En una aplicación real no puedes decidir por tu cuenta cuál de dos registros duplicados debe eliminarse. Puede ser un dato legítimo, un error de importación o un identificador que necesita una regla diferente.
+
+En nuestra colección de práctica sí tenemos autorización para resolver el conflicto ficticio. Por ejemplo, podemos cambiar el código del documento tres:
+
+```javascript
+d.duplicados_clase.updateOne(
+  {_id:3},
+  {$set:{codigo:"C"}}
+)
+```
+
+Comprueba que ahora existen A, B y C.
+
+### Paso 5. Repetir la creación
+
+```javascript
+d.duplicados_clase.createIndex(
+  {codigo:1},
+  {unique:true,name:"ix_codigo_unico"}
+)
+```
+
+**Resultado esperado:** el índice se crea. Ahora una nueva inserción con código A debe fallar.
+
+### Paso 6. Explicar el ciclo completo
+
+1. Definimos una regla.
+2. MongoDB detectó datos que la incumplían.
+3. Identificamos los documentos problemáticos.
+4. Corregimos **solo** el conjunto de práctica conforme a la regla del ejercicio.
+5. Creamos el índice.
+6. Verificamos que la restricción rechazaba nuevos duplicados.
+
+**Nunca sustituyas este procedimiento por «borrar todo hasta que funcione».** En bases reales la corrección requiere decisiones del negocio y conservación de información.
+
+### Evaluación final
+
+Describe la diferencia entre el error de construir un índice unique sobre datos ya duplicados y el error de insertar un duplicado cuando el índice ya existe. ¿Qué protege MongoDB en cada caso?
