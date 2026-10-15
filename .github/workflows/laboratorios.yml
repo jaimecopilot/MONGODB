@@ -1,7 +1,7 @@
 name: Laboratorios MongoDB 8.0
 on:
   push:
-    branches: [main, laboratorio/github-actions]
+    branches: [main, laboratorio/github-actions, docs/auditoria-manuales]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -51,6 +51,27 @@ jobs:
       - name: Diagnostico
         if: failure()
         run: docker compose logs --tail=120 mongo-seguridad mongo-tls
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  recorrido_aula:
+    name: "Recorrido de clase - datos sin indices"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Iniciar MongoDB
+        env:
+          MONGO_ADMIN_PASSWORD: laboratorio-desde-github-actions
+        run: docker compose up -d --wait mongo-indices
+      - name: Cargar 200000 ventas sin indices secundarios
+        run: docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/sembrar_ventas.js
+      - name: Probar progresion con explain e indices
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/comprobar_recorrido_aula.js
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
       - name: Apagar
         if: always()
         run: docker compose down --volumes --remove-orphans
