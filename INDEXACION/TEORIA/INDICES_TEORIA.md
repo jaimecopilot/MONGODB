@@ -545,3 +545,278 @@ No confundas índices `2d` para coordenadas planas con los `2dsphere` para ubica
 Una empresa de mensajería podría indexar la ubicación de sus centros de distribución para buscar el más cercano a un cliente. Eso no resuelve automáticamente la ruta óptima de reparto. El índice contesta consultas espaciales sobre los datos almacenados; optimizar recorridos con múltiples paradas y restricciones es otro problema.
 
 **Pregunta de transferencia:** ¿qué fallaría si una aplicación intercambia latitud y longitud? ¿Por qué un punto situado a 2 kilómetros en línea recta no garantiza un trayecto de 2 kilómetros?
+
+
+---
+
+# Unidad 7. Índices hashed: igualdad y distribución de valores
+
+## 7.1. ¿Por qué una representación hash?
+
+Un índice tradicional sobre un número lo organiza según su valor. Si buscamos entre 500 y 900, la ordenación numérica facilita localizar ese intervalo. Pero hay sistemas donde el requisito dominante no es recorrer valores cercanos, sino encontrar por igualdad y ayudar a distribuir las claves de forma más uniforme.
+
+Un índice `hashed` almacena una representación hash del valor indexado. En términos intuitivos, una función hash transforma un valor en otro valor calculado de forma determinista. Si aplicamos la función al mismo dato, obtenemos el mismo resultado; valores próximos en el espacio original no tienen por qué quedar próximos en el espacio transformado.
+
+En el laboratorio existe el campo `idGrupo`, que identifica uno entre muchos grupos sintéticos:
+
+```javascript
+db.ventas.createIndex({ idGrupo: "hashed" })
+```
+
+La consulta típica es una igualdad:
+
+```javascript
+db.ventas.find({ idGrupo: 809 })
+```
+
+El sistema calcula el hash del valor buscado y puede utilizar el índice para encontrar candidatos adecuados.
+
+## 7.2. Qué no debes pedirle a un hash
+
+La idea de hash rompe la correspondencia con el orden original. Los valores `500`, `501` y `502` no tienen por qué aparecer juntos en el índice hashed. Por ello, **no es una estructura diseñada para acelerar rangos numéricos** como «grupos entre 500 y 900».
+
+```javascript
+db.ventas.find({ idGrupo: { $gte: 500, $lte: 900 } })
+```
+
+Este filtro puede ser perfectamente válido como consulta, pero no debes suponer que el índice hashed es el acceso adecuado para resolver su intervalo. La propiedad que estamos aprovechando es igualdad, no ordenación.
+
+## 7.3. No confundir hash de índice con cifrado de contraseñas
+
+Que un índice utilice la palabra *hashed* no significa que los datos de la base estén cifrados, ni que podamos almacenar contraseñas en claro y confiar en el índice. Son problemas completamente distintos.
+
+Una función hash usada para organizar claves no es un mecanismo de protección de secretos. El propósito aquí es la representación de valores para determinadas operaciones de acceso y distribución.
+
+**Pregunta:** ¿utilizarías `{ idGrupo:"hashed" }` para mostrar los grupos ordenados de menor a mayor? Explica por qué un índice ordenado convencional encaja mejor con esa tarea.
+
+---
+
+# Unidad 8. Índices únicos y parciales: la integridad también se diseña
+
+## 8.1. Una pregunta distinta a la rapidez
+
+Supón que cada empleado debe tener una dirección de correo distinta. Un índice que permita localizar cuentas por correo será útil para acceder rápidamente. Pero la empresa exige algo más: **no permitir que se creen dos cuentas con el mismo correo**.
+
+Eso es una regla de integridad. MongoDB puede imponerla con un índice único:
+
+```javascript
+db.alumnos.createIndex({ email: 1 }, { unique: true })
+```
+
+Si insertas dos documentos con `email:"ana@ejemplo.test"`, el segundo intento debe fallar por clave duplicada, normalmente con el código `E11000`.
+
+**El fallo es el resultado esperado.** No hay que interpretar que MongoDB «no sabe insertar». Está rechazando datos que violan una regla declarada por nosotros.
+
+## 8.2. Crear una restricción sobre datos que ya existen
+
+¿Qué ocurre si la colección ya contiene correos repetidos y después intentamos crear un índice único? MongoDB no puede imponer limpiamente esa restricción sin resolver antes los duplicados existentes: la construcción del índice puede fallar.
+
+El orden correcto de implantación en una base real incluye:
+1. Identificar qué campo se considera único y bajo qué reglas.
+2. Buscar documentos duplicados o valores ausentes.
+3. Resolver esos conflictos de acuerdo con el negocio.
+4. Crear la restricción.
+5. Probar tanto una inserción válida como una duplicada.
+
+No borres datos reales para conseguir que pase el comando. Las reglas de unicidad son decisiones de negocio, no simples ajustes de rendimiento.
+
+## 8.3. ¿Qué ocurre con valores que faltan?
+
+Una complicación importante aparece si algunas cuentas aún no tienen correo electrónico. Un índice único de un solo campo trata de forma especial los documentos que no contienen ese campo o contienen `null`. Puede impedir crear múltiples documentos sin correo bajo determinadas configuraciones.
+
+Por eso no deberíamos decidir «índice único en email» sin preguntarnos si el campo es obligatorio para todos, opcional para algunos o si solo debe ser único cuando realmente contiene un valor.
+
+## 8.4. Índices parciales: solo ciertos documentos
+
+Una empresa quiere una clave única para los **cupones activos**, pero quizá permite reutilizar códigos de promociones históricas inactivas. Podemos estudiar un índice parcial que solo se aplique a documentos que cumplan un filtro:
+
+```javascript
+db.cupones.createIndex(
+  { codigo: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { activo: true }
+  }
+)
+```
+
+La intención es exigir unicidad de `codigo` entre los documentos donde `activo` sea verdadero. Al diseñarlo debemos pensar qué significa un documento sin `activo` y qué ocurrirá cuando un cupón pase de inactivo a activo.
+
+Por ejemplo:
+- Cupón A, código `PROMO7`, activo: verdadero.
+- Cupón B, código `PROMO7`, activo: falso.
+- Intento de activar B mientras A sigue activo.
+
+Ese último cambio debe analizarse como una posible violación de la restricción. El índice no solo interviene al insertar: también importa cuando actualizamos un documento de manera que entra en el conjunto indexado.
+
+## 8.5. Índice parcial no es índice sparse
+
+Ambos pueden almacenar únicamente una parte de los documentos, pero **no son equivalentes**. Un índice parcial utiliza una expresión declarada para delimitar qué documentos se incluyen; uno sparse tiene reglas específicas relacionadas con la presencia de campos. No uses las palabras como sinónimos al documentar una arquitectura.
+
+**Pregunta razonada:** si las promociones deben ser únicas solo mientras están activas, ¿por qué un índice único general sobre `codigo` podría ser demasiado restrictivo? ¿Qué riesgo aparece cuando se reactiva un cupón?
+
+---
+
+# Unidad 9. TTL: datos que deben caducar solos
+
+## 9.1. El problema de las sesiones olvidadas
+
+Imagina una aplicación que almacena documentos temporales para una sesión de usuario. Pasados ciertos minutos, esos datos ya no deberían conservarse. Podríamos programar una tarea externa que buscara registros antiguos y los borrara. MongoDB ofrece otra posibilidad: un índice **TTL**, de *time to live*, asociado a un campo de fecha.
+
+En una colección `sesiones` cada documento podría contener:
+
+```javascript
+{
+  _id: "sesion-7",
+  usuario: "alumno-1",
+  expiraEn: ISODate("2025-11-01T10:00:00Z")
+}
+```
+
+Si `expiraEn` representa el instante absoluto en que deja de ser válida, creamos:
+
+```javascript
+db.sesiones.createIndex(
+  { expiraEn: 1 },
+  { expireAfterSeconds: 0 }
+)
+```
+
+El valor cero indica que, una vez alcanzado el instante almacenado en el campo, el documento resulta elegible para la eliminación TTL.
+
+## 9.2. Caducar no equivale a desaparecer en ese milisegundo
+
+MongoDB ejecuta la eliminación TTL mediante un monitor periódico y asíncrono. **Un documento caducado puede permanecer un tiempo después de su fecha de expiración.** No construyas un sistema de autorización suponiendo que «si el documento existe es porque su sesión sigue vigente».
+
+La aplicación debe comprobar la validez temporal cuando toma decisiones sensibles. El TTL ayuda a limpiar datos, no sustituye toda la lógica de seguridad y expiración.
+
+En nuestro laboratorio, el parámetro de monitor TTL se acelera para hacer razonable la comprobación. Esa elección es específica de la demostración; no presupone la misma frecuencia en todos los servidores.
+
+## 9.3. ¿Por qué es crucial usar una fecha?
+
+Un campo como `"2025-11-01"` almacenado literalmente como cadena no representa el mismo tipo que una fecha BSON. Los índices TTL necesitan valores temporales adecuados para sus reglas de expiración. Si el documento usa un campo ausente o un tipo que no se considera fecha válida para TTL, no podemos esperar que el monitor lo trate igual.
+
+Para comprobarlo en el laboratorio:
+1. Insertamos un documento con una fecha ya vencida.
+2. Insertamos otro con una fecha futura.
+3. Observamos si el monitor elimina el primero.
+4. Confirmamos que el segundo permanece.
+
+La prueba debe contemplar un margen de espera. **No concluyas que TTL está roto porque el documento no desaparezca al instante.**
+
+## 9.4. Un error de modelado: confundir creación y expiración
+
+Hay dos formas habituales de pensar la caducidad:
+
+- Guardar **cuándo fue creado** y definir cuántos segundos debe durar.
+- Guardar **cuándo debe expirar** e indexarlo con `expireAfterSeconds:0`.
+
+No mezcles ambas ideas sin analizarlo. Si almacenas la fecha de creación y usas cero, estarás declarando que el documento está caducado desde que nace. Si almacenas una fecha futura y le añades un intervalo no deseado, lo borrarás más tarde de lo previsto.
+
+**Ejercicio conceptual:** una sesión creada a las 10:00 debe expirar a las 10:30. Diseña el campo temporal y el índice de las dos estrategias. Después explica por qué el monitor no garantiza eliminarla exactamente a las 10:30:00.
+
+---
+
+# Unidad 10. Consultas cubiertas, proyecciones y FETCH
+
+## 10.1. Hasta ahora recuperábamos documentos completos
+
+A veces una aplicación no necesita un documento entero. Supón que muestra una lista de clientes y sus importes, sin detalles de entrega ni descripciones largas. Si el índice contiene todas las claves solicitadas y el filtro puede resolverse desde él, MongoDB podría obtener los resultados **sin recuperar los documentos completos**.
+
+A eso se le llama consulta **cubierta** por el índice, bajo las condiciones correspondientes.
+
+Imagina un índice:
+
+```javascript
+db.ventas.createIndex({ clienteId: 1, importe: 1 })
+```
+
+La consulta solo pide esos dos campos:
+
+```javascript
+db.ventas.find(
+  { clienteId: 809 },
+  { _id: 0, clienteId: 1, importe: 1 }
+)
+```
+
+La proyección es el segundo objeto que pasamos a `find`. `_id:0` excluye expresamente el identificador `_id`, que MongoDB incluye por defecto en muchos resultados. Si no lo excluyéramos y el índice no contuviera `_id`, la cobertura completa de esta consulta podría verse impedida.
+
+## 10.2. Qué observar en explain
+
+Si una consulta está realmente cubierta, los contadores pueden mostrar `totalDocsExamined:0`: el motor obtiene los datos de las entradas de índice sin recuperar documentos de la colección.
+
+Ese cero es **muy significativo**, pero no significa que el trabajo sea gratuito. El motor sigue recorriendo claves, procesando filtros y devolviendo resultados. Para entenderlo también miramos `totalKeysExamined`.
+
+Añadir un campo a la proyección cambia las necesidades. Si de pronto pedimos `descripcion` y el índice solo contiene cliente e importe, probablemente será necesario recuperar los documentos para conocer la descripción.
+
+## 10.3. Cubrir todas las consultas puede ser mala idea
+
+Podríamos sentir la tentación de añadir muchos campos a los índices para que más consultas queden cubiertas. Eso aumenta el tamaño de los índices y el coste de mantenerlos. Además, una consulta con arrays y multikey puede tener reglas adicionales que impidan ciertas coberturas.
+
+El diseño correcto considera la frecuencia de uso de la consulta, su proyección real, la cantidad de resultados y el coste de escritura. No se trata de ganar un concurso de índices enormes.
+
+**Pregunta:** ¿por qué una consulta puede examinar cero documentos y, sin embargo, examinar 500 claves? ¿Qué cambiaría al pedir el campo `descripcion`?
+
+---
+
+# Unidad 11. Mantener índices y decidir cuáles merece la pena conservar
+
+## 11.1. Saber qué índices existen
+
+Antes de proponer uno nuevo, comprueba el inventario de la colección:
+
+```javascript
+db.ventas.getIndexes()
+```
+
+Esta orden muestra definiciones de índices, nombres y propiedades. No te dice por sí sola si cada índice resulta valioso ni cuánto acelera cada consulta. Esa conclusión exige observar cargas y consultas reales.
+
+Puedes encontrar, por ejemplo, un índice compuesto cuyo prefijo es muy parecido a otro índice simple. En determinadas condiciones el compuesto puede atender consultas que antes usaban el simple, pero antes de eliminarlo hay que analizar diferencias como unicidad, opciones y cargas específicas.
+
+## 11.2. Índices ocultos: ensayar una retirada
+
+En algunas versiones y configuraciones podemos **ocultar** un índice para impedir que el optimizador lo elija en planes normales, sin eliminar su definición. Esto permite estudiar cómo se comportan las consultas si dejamos de ofrecerlo al planificador:
+
+```javascript
+db.ventas.hideIndex("ix_cliente")
+```
+
+Después podríamos volver a mostrarlo:
+
+```javascript
+db.ventas.unhideIndex("ix_cliente")
+```
+
+Ocultar no significa liberar su espacio o dejar de mantenerlo. El índice sigue existiendo, y el servidor debe conservar su consistencia. No confundas «no disponible para el planificador» con «eliminado de la colección».
+
+## 11.3. Eliminar un índice es una decisión con riesgo
+
+```javascript
+db.ventas.dropIndex("ix_cliente")
+```
+
+Eliminar un índice puede reducir mantenimiento y espacio, pero también puede empeorar consultas que dependían de él. En un sistema real conviene conocer métricas de uso, necesidades del producto y ventanas de mantenimiento. No se recomienda borrar índices en producción solo para comprobar una idea de clase.
+
+En las prácticas usamos exclusivamente colecciones de demostración que podemos reconstruir.
+
+## 11.4. Qué queremos aprender al medir un millón de ventas
+
+Si repetimos el mismo experimento con 200.000 y 1.000.000 de documentos, no estamos buscando un número mágico de milisegundos. Queremos razonar sobre cómo crece el trabajo de un recorrido completo y cómo un índice muy selectivo evita recorrer todo el conjunto.
+
+Para que la comparación tenga sentido debemos documentar:
+- mismo patrón de consulta;
+- cantidad exacta de datos;
+- índice disponible o ausente;
+- resultados devueltos;
+- claves y documentos examinados;
+- entorno de ejecución;
+- diferencias de planificación o caché que puedan explicar tiempos.
+
+**Conclusión del capítulo:** un índice se justifica por las necesidades de consulta y la evidencia de su efecto, no por su mera existencia. La persona que administra la base debe saber explicar qué problema resuelve y qué coste agrega.
+
+### Comprobación integrada
+
+Una aplicación tiene tres operaciones: buscar un pedido por número, mostrar los últimos pedidos pagados y localizar etiquetas de riesgo en una lista. Propón un índice candidato para cada una y explica la función del campo o del orden de campos. A continuación indica qué revisarías con `explain` y cómo estimarías el coste de mantener esos índices ante nuevas ventas.
+
+No necesitas acertar todos los detalles de un plan sin ejecutarlo. Necesitas formular una hipótesis comprobable.
