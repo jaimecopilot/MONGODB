@@ -330,3 +330,308 @@ Explica, con un ejemplo de tus ventas, cómo responderías a alguien que afirma:
 Tu respuesta debe distinguir igualdad, rango, ordenación y el volumen de candidatos. No se acepta como justificación repetir simplemente «porque lo dice ESR».
 
 **Siguiente tema:** un índice multikey para un campo que contiene una lista de etiquetas, y por qué ese índice es distinto de uno sobre un valor escalar.
+
+
+---
+
+# Laboratorio 3 — Buscar etiquetas de ventas y palabras dentro de descripciones
+
+## Qué aprenderás y por qué importa
+
+La primera práctica localizaba una venta mediante un número. Pero una tienda también puede pedir «todas las ventas etiquetadas como urgentes» o «descripciones que hablen de café». Son problemas distintos de la búsqueda exacta por número.
+
+El objetivo es comprender cómo MongoDB busca valores dentro de arrays, qué significa un índice multikey y por qué un índice de texto clásico no equivale a buscar un campo por igualdad.
+
+### Paso 1. Verificar datos y conexión
+
+Abre PowerShell o Bash dentro de la carpeta del repositorio. Si detuviste MongoDB:
+
+```bash
+docker compose up -d --wait mongo-indices
+```
+
+Comprueba que la colección `curso_indices.ventas` contiene datos:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({}))'
+```
+
+Si devuelve cero, vuelve a la primera práctica y carga las ventas ficticias. No continúes interpretando una búsqueda sobre datos inexistentes.
+
+### Paso 2. Observar qué significa tener un array
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({numero:1}))'
+```
+
+Localiza la propiedad `etiquetas`. En el conjunto sintético tiene varios valores, por ejemplo una etiqueta general y otra que indica si la venta procede de la web. Algunos documentos incluyen `urgente`.
+
+**Pregunta previa:** ¿crees que `etiquetas` es una cadena única como `"web,urgente"` o una lista de valores separados? La diferencia es importante: MongoDB reconoce sus elementos como valores independientes dentro de un array.
+
+### Paso 3. Consultar un valor contenido en la lista
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({etiquetas:"urgente"}))'
+```
+
+La consulta no pide que el array sea exactamente igual a `"urgente"`. Pide documentos donde ese valor aparezca como elemento del campo array. Anota el número de coincidencias: ______.
+
+### Paso 4. Verificar que existe el índice multikey
+
+En la primera práctica, `03_crear_indices.js` creó `ix_etiquetas`:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(i=>i.name==="ix_etiquetas"))'
+```
+
+Deberías observar la clave `etiquetas:1`. Como el campo contiene arrays en nuestros documentos, el índice funciona como multikey.
+
+Ahora ejecuta una consulta forzando el índice **solo para estudiar el plan**:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.find({etiquetas:"urgente"}).hint("ix_etiquetas").limit(3).explain("executionStats").executionStats)'
+```
+
+Busca `nReturned`, `totalDocsExamined` y `totalKeysExamined`. Pueden existir más claves que resultados: los arrays contribuyen a las entradas del índice. No confundas eso con documentos duplicados almacenados.
+
+### Paso 5. Comprender por qué dos condiciones pueden pertenecer a elementos diferentes
+
+Imagina la siguiente venta:
+
+```javascript
+{
+  productos: [
+    { sku: "SKU10", cantidad: 1 },
+    { sku: "SKU20", cantidad: 3 }
+  ]
+}
+```
+
+Si buscamos por `productos.sku:"SKU10"` y `productos.cantidad:3` como dos condiciones independientes, cada condición puede satisfacerse en elementos distintos de ese array.
+
+Para expresar que **el mismo elemento** debe tener ambas propiedades, usamos:
+
+```javascript
+{
+  productos: {
+    $elemMatch: { sku: "SKU10", cantidad: 3 }
+  }
+}
+```
+
+**La segunda consulta no debería encontrar el documento mostrado**, porque el producto SKU10 tiene cantidad 1 y no 3. Este ejemplo demuestra una diferencia de significado, no simplemente un truco para optimizar rendimiento.
+
+### Paso 6. Probar la distinción sin alterar las ventas
+
+Este experimento utiliza una colección temporal diferente de `ventas`. Entra en `mongosh`:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de `mongosh` introduce estas instrucciones de una en una:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.productos_ejemplo.drop();
+d.productos_ejemplo.insertOne({
+  _id: 1,
+  productos: [
+    {sku:"SKU10",cantidad:1},
+    {sku:"SKU20",cantidad:3}
+  ]
+});
+```
+
+La llamada `drop()` elimina **solo la colección de prueba `productos_ejemplo`**. No afecta a `ventas`. Ahora comprueba:
+
+```javascript
+d.productos_ejemplo.find({
+  "productos.sku":"SKU10",
+  "productos.cantidad":3
+}).toArray()
+```
+
+Observa que la primera consulta puede encontrar el documento: la existencia de SKU10 y la existencia de cantidad 3 se verifican sin obligar a que correspondan al mismo elemento.
+
+Después:
+
+```javascript
+d.productos_ejemplo.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).toArray()
+```
+
+El resultado debe ser un array vacío. **Si entiendes por qué las salidas difieren, ya has comprendido la razón de utilizar `$elemMatch`.**
+
+Puedes salir de `mongosh` escribiendo `exit`.
+
+### Paso 7. Pasar de etiquetas a palabras de una descripción
+
+Ahora queremos buscar ventas cuya descripción incluya el término `cafe`. No lo buscamos como valor exacto del campo completo.
+
+Comprueba primero que hay descripciones de café:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({descripcion:"cafe premium en grano"}))'
+```
+
+La primera práctica crea también un índice de tipo `text` sobre `descripcion`. Comprueba su existencia mediante `getIndexes()` antes de utilizar el operador `$text`.
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({$text:{$search:"cafe"}}))'
+```
+
+**Resultado esperado:** una cifra positiva. MongoDB busca el término mediante el mecanismo de búsqueda textual clásico. Esto no es lo mismo que `find({descripcion:"cafe"})`, que busca igualdad del valor completo.
+
+### Paso 8. Interpretar una puntuación textual
+
+Si quieres observar la puntuación de coincidencia:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.find({$text:{$search:"cafe"}},{descripcion:1,score:{$meta:"textScore"}}).sort({score:{$meta:"textScore"}}).limit(3).toArray())'
+```
+
+Busca `descripcion` y `score`. La puntuación sirve para ordenar relevancia textual según el mecanismo disponible; **no es una nota de calidad humana ni un porcentaje de certeza**.
+
+### Paso 9. Resolver errores sin improvisar
+
+- **El operador `$text` dice que falta índice:** todavía no has ejecutado `03_crear_indices.js`, o recargaste ventas posteriormente.
+- **`getIndexes()` devuelve solo `_id_`:** estás en la línea base de la primera práctica. Crea primero los índices.
+- **La búsqueda de café devuelve cero:** examina una descripción real y revisa la configuración de idioma del índice; no supongas que cualquier búsqueda literal funciona igual.
+- **`$elemMatch` no devuelve el documento:** en este ejemplo es el resultado correcto, no un error de MongoDB.
+
+### Tu explicación final
+
+Redacta por qué estas tres consultas no son equivalentes:
+
+```javascript
+{ etiquetas: "urgente" }
+{ descripcion: "cafe" }
+{ $text: { $search: "cafe" } }
+```
+
+Y explica qué diferencia de significado introduce `$elemMatch` cuando el campo contiene documentos anidados en un array.
+
+---
+
+# Laboratorio 4 — Distancias, coordenadas e índice hashed
+
+## Propósito
+
+La empresa tiene puntos de entrega y quiere responder «¿cuáles están cerca de esta dirección?». También necesita recuperar rápidamente ventas de un grupo concreto mediante una consulta por igualdad.
+
+A primera vista ambos problemas parecen búsquedas, pero requieren estructuras distintas: `2dsphere` para determinadas consultas geográficas y `hashed` para igualdad sobre un valor transformado.
+
+### Paso 1. Preparar los datos
+
+En la terminal de tu ordenador:
+
+```bash
+docker compose up -d --wait mongo-indices
+```
+
+Abre `mongosh` dentro del contenedor:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+A partir de este punto, los fragmentos JavaScript se escriben dentro de `mongosh`, no en PowerShell.
+
+### Paso 2. Crear tres ubicaciones conocidas
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.puntos_entrega_clase.drop();
+d.puntos_entrega_clase.insertMany([
+  {
+    nombre:"Sol",
+    ubicacion:{type:"Point",coordinates:[-3.7038,40.4168]}
+  },
+  {
+    nombre:"Retiro",
+    ubicacion:{type:"Point",coordinates:[-3.6833,40.4153]}
+  },
+  {
+    nombre:"Barcelona",
+    ubicacion:{type:"Point",coordinates:[2.1700,41.3800]}
+  }
+]);
+```
+
+`drop()` borra exclusivamente la colección de ejemplo `puntos_entrega_clase`. Las coordenadas están escritas como **longitud primero, latitud después**. Son puntos aproximados utilizados para explicar la consulta; no constituyen una aplicación de navegación real.
+
+### Paso 3. Crear el índice apropiado
+
+```javascript
+d.puntos_entrega_clase.createIndex(
+  {ubicacion:"2dsphere"},
+  {name:"ix_puntos_esfera"}
+);
+```
+
+El término `2dsphere` declara el tipo geoespacial adecuado para la geometría usada. Es diferente de un índice normal `{ubicacion:1}`, que no comprende por sí solo las operaciones sobre puntos terrestres.
+
+### Paso 4. Buscar puntos próximos
+
+```javascript
+d.puntos_entrega_clase.find({
+  ubicacion:{
+    $near:{
+      $geometry:{
+        type:"Point",
+        coordinates:[-3.7038,40.4168]
+      },
+      $maxDistance:3500
+    }
+  }
+}).toArray()
+```
+
+Léela de fuera hacia dentro: buscar documentos, filtrar por ubicación cercana a un punto de referencia y exigir una distancia máxima aproximada de 3.500 metros.
+
+**Resultado esperado:** Sol y Retiro; no Barcelona. Si la consulta encuentra también Barcelona, examina si intercambiaste las coordenadas o utilizaste una distancia absurda.
+
+### Paso 5. Demostrar qué problema NO resuelve el índice
+
+Esta consulta no puede decirte automáticamente qué ruta debe seguir un repartidor, cuánto tráfico existe o cuánto tardará en llegar. El índice ayuda a buscar puntos próximos **geométricamente**. Calcular un trayecto por calles es otra aplicación y necesita otra información.
+
+Anota: ¿qué diferencia hay entre «a 2 km en línea recta» y «a 2 km por carretera»?
+
+### Paso 6. Conocer los índices hashed
+
+La colección de ventas incluye `idGrupo`. El archivo `03_crear_indices.js` añade un índice hashed sobre ese campo. Comprueba que existe:
+
+```javascript
+d.ventas.getIndexes().filter(x=>x.name==="ix_grupo_hash")
+```
+
+Si aparece la definición con `"hashed"`, realiza una búsqueda por igualdad:
+
+```javascript
+d.ventas.find({idGrupo:809}).hint("ix_grupo_hash").limit(3).toArray()
+```
+
+Debes ver ventas cuyo `idGrupo` sea 809. Ahora explica por qué este índice **no está pensado para recorrer de forma ordenada los grupos 800 a 900**: el hash representa valores sin conservar necesariamente su proximidad numérica original.
+
+### Paso 7. Interpretar el plan
+
+```javascript
+d.ventas.find({idGrupo:809})
+  .hint("ix_grupo_hash")
+  .limit(3)
+  .explain("executionStats")
+```
+
+Observa si el plan usa un índice y cuántas claves/documentos examina. `hint` se utiliza en esta demostración para estudiar un índice concreto. No es una recomendación de forzar siempre un acceso en producción.
+
+### Paso 8. Cerrar y justificar
+
+Sal de `mongosh` escribiendo `exit`. Resume:
+- qué pregunta resolvió `2dsphere`;
+- qué significado tienen las coordenadas;
+- qué pregunta resuelve bien `hashed`;
+- por qué ninguna de las dos estructuras sustituye automáticamente a un índice ordenado convencional por número.
+
+**Error habitual:** confundir «hashed» con contraseña cifrada. Un índice hashed organiza claves mediante un cálculo hash; no protege por sí mismo secretos personales.
