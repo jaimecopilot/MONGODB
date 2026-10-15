@@ -1897,3 +1897,175 @@ Escribe una respuesta de seis frases:
 6. Cómo comprobarías que una retirada de privilegios se aplicó.
 
 La respuesta debe permitir entender por qué los roles se diseñan a partir de responsabilidades y no de nombres agradables.
+
+
+---
+
+# Laboratorio 20 — Inspeccionar usuarios y roles en lugar de confiar en su nombre
+
+## Objetivo
+
+Un usuario llamado `soloLectura` podría tener permisos de escritura si alguien le asignó un rol inadecuado. Del mismo modo, una cuenta llamada `admin` podría no ser realmente administradora.
+
+Los nombres no son pruebas de autorización. Vamos a inspeccionar las definiciones reales de las cuentas y los roles del laboratorio.
+
+### Paso 1. Conectarse con una identidad autorizada
+
+Desde PowerShell o Bash, con el servicio preparado:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+Introduce la contraseña administrativa. Dentro de `mongosh`:
+
+```javascript
+const curso = db.getSiblingDB("curso_seguridad");
+```
+
+No vamos a modificar documentos de ventas. Trabajaremos con las identidades del servidor protegido.
+
+### Paso 2. Consultar el usuario lector
+
+```javascript
+curso.getUser("lectorlab")
+```
+
+El resultado debe mostrar información sobre esa cuenta, incluidos sus roles asignados. Busca `role:"read"` y `db:"curso_seguridad"`.
+
+Si el resultado es nulo o no aparece esa cuenta, probablemente no preparaste el entorno del laboratorio 1 o estás consultando otra instancia/base. **No inventes una salida que no existe.**
+
+### Paso 3. Consultar el escritor
+
+```javascript
+curso.getUser("escritorlab")
+```
+
+Compara el resultado con el anterior. La diferencia importante debe ser `readWrite` frente a `read`. Eso explica por qué una inserción permitida para uno debe estar denegada para el otro.
+
+### Paso 4. Examinar privilegios efectivos
+
+Con los privilegios adecuados puedes solicitar más información sobre una cuenta:
+
+```javascript
+curso.getUser("lectorlab",{showPrivileges:true})
+```
+
+Examina la estructura que describe privilegios y roles. El formato puede ser más extenso de lo esperado. No intentes memorizar todo el JSON: busca **recursos y acciones**.
+
+La pregunta clave es:
+- ¿Sobre qué base o colección actúa el rol?
+- ¿Qué operaciones permite?
+- ¿Hay roles adicionales heredados que amplíen sus poderes?
+
+### Paso 5. Distinguir roles asignados de privilegios efectivos
+
+Una cuenta puede tener varios roles. Los permisos efectivos pueden incluir acciones derivadas de más de una asignación y de roles heredados. Por eso no basta con observar que aparece el nombre `read` si también existen asignaciones más amplias.
+
+En el laboratorio inicial las cuentas son sencillas. La práctica es aprender una técnica de inspección que seguirá siendo útil cuando los permisos sean más complejos.
+
+### Paso 6. Comprobarlo mediante una operación real
+
+Cierra la sesión de administrador y entra como `lectorlab`. Consulta `demo-1` y después intenta insertar un registro de prueba.
+
+Si el rol inspeccionado era de lectura, debe aparecer una lectura permitida y una escritura denegada. **La definición y el comportamiento observado deben concordar.**
+
+### Paso 7. Resolver una discrepancia
+
+Supongamos que `getUser` muestra permisos de escritura cuando esperabas lectura únicamente. No conviertas el resultado en un simple error del manual. Examina si:
+- el usuario fue modificado en una práctica previa;
+- se le concedió temporalmente otro rol;
+- te conectaste a una base o servidor diferentes;
+- se reutilizó un volumen de laboratorio que ya contenía usuarios anteriores.
+
+La infraestructura persistente mantiene datos y cuentas entre reinicios. Esa es una ventaja, pero obliga a conocer el estado inicial.
+
+### Preguntas de evaluación
+
+1. ¿Por qué el nombre `soloLectura` no demuestra nada sobre los privilegios?
+2. ¿Qué diferencia hay entre mirar un rol asignado y comprobar una operación real?
+3. ¿Qué ocurre si una cuenta tiene tanto `read` como un rol que concede escritura?
+4. ¿Por qué un contenedor recién iniciado puede conservar permisos creados ayer?
+
+---
+
+# Laboratorio 21 — Un informe final de seguridad que pueda reproducirse
+
+## El reto
+
+Tu formador te pide entregar una pequeña investigación del laboratorio. No quiere una lista de comandos copiados ni una captura con cinco mensajes verdes. Quiere saber **qué se probó, cómo se comprobó y qué significan los resultados**.
+
+Trabajarás con un servidor y una identidad de la práctica, sin introducir datos reales.
+
+### Paso 1. Escribir el escenario en lenguaje natural
+
+Ejemplo:
+
+> «La colección ficticia secretos contiene un registro de demostración. La cuenta lectorlab debe poder leerlo, pero no debe modificarlo».
+
+Esta frase expresa **la necesidad de seguridad**. El código que ejecutaremos después debe comprobarla.
+
+### Paso 2. Identificar el contexto
+
+Escribe:
+- Servicio Docker: `mongo-seguridad`.
+- Base de datos: `curso_seguridad`.
+- Colección: `secretos`.
+- Identidad principal: `lectorlab`.
+- Base de autenticación: `curso_seguridad`.
+
+Si alguno de estos datos es diferente en tu ejecución, anótalo en lugar de fingir que coincide.
+
+### Paso 3. Formular hipótesis independientes
+
+Hipótesis A: el servidor está en ejecución.
+
+Hipótesis B: la cuenta puede demostrar su identidad.
+
+Hipótesis C: la cuenta puede consultar el documento `demo-1`.
+
+Hipótesis D: la cuenta no puede insertar.
+
+Cada hipótesis necesita una comprobación distinta: `docker compose ps`, la conexión autenticada, `findOne` y `insertOne`.
+
+### Paso 4. Ejecutar y registrar
+
+Registra para cada comprobación:
+- comando;
+- resultado esperado;
+- salida observada;
+- interpretación;
+- diagnóstico si hubo discrepancia.
+
+**No incluyas contraseñas en las capturas o informes.** Los nombres ficticios de cuentas y los códigos de error bastan.
+
+### Paso 5. Explicar un error esperado
+
+Si la inserción es rechazada con un error de autorización, indica que se trata de la **restricción prevista**. La cuenta consiguió autenticarse y consultar; el servidor negó escribir porque el rol no incluye esa acción.
+
+### Paso 6. Separar lo observado de lo inferido
+
+Una prueba de `lectorlab` sobre `secretos` **no demuestra** que todas las colecciones del servidor estén protegidas de la misma forma. Tampoco demuestra que las copias estén cifradas o que los certificados del servidor de TLS sean correctos.
+
+Una conclusión profesional delimita sus afirmaciones a la evidencia disponible.
+
+### Paso 7. Entrega final
+
+Tu informe debe contener:
+1. Problema y resultado deseado.
+2. Datos y entorno de demostración.
+3. Cuenta y roles examinados.
+4. Operación positiva y resultado.
+5. Operación negativa y resultado.
+6. Qué has aprendido.
+7. Qué otros controles tendrían que probarse en un sistema real.
+
+### Solución razonada
+
+«Se probó una instancia local con una colección ficticia. La cuenta de lectura se autenticó contra la base prevista y consiguió consultar el documento preparado. Su intento de inserción fue rechazado por autorización. Los resultados respaldan el funcionamiento de esos roles en este entorno. No acreditan, por sí solos, la configuración de copias, cifrado en reposo o controles de una instalación productiva».
+
+La solución es breve, pero **cada afirmación puede relacionarse con una comprobación concreta**.
+
+### Criterio de superación
+
+La práctica está conseguida cuando otra persona puede repetir los pasos, observar resultados comparables y entender por qué algunas acciones deben terminar en error. El éxito no es evitar todos los mensajes de error: es saber **cuáles significan que la política funciona**.
