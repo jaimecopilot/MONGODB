@@ -1956,6 +1956,131 @@ No depende del número de capturas que hayas reunido. Depende de que sepas relac
 
 ---
 
+## 43. Actualizar un campo indexado sin reconstruir el índice a mano
+
+Una idea equivocada es pensar que, después de cambiar un valor, debemos borrar y crear el índice para que las búsquedas vuelvan a funcionar. El motor mantiene sus índices cuando se modifican los documentos.
+
+### Paso 1. Preparar solo dos productos
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_indices
+db.productos_mantenimiento_demo.drop()
+
+db.productos_mantenimiento_demo.insertMany([
+  {sku: "A", precio: 10},
+  {sku: "B", precio: 20}
+])
+
+db.productos_mantenimiento_demo.createIndex(
+  {precio: 1},
+  {name: "ix_precio"}
+)
+```
+
+### Paso 2. Consultar el precio anterior
+
+```javascript
+db.productos_mantenimiento_demo.find({precio: 10})
+```
+
+Debe aparecer el producto `A`.
+
+### Paso 3. Cambiar ese precio
+
+```javascript
+db.productos_mantenimiento_demo.updateOne(
+  {sku: "A"},
+  {$set: {precio: 30}}
+)
+```
+
+La operación debería informar de que se ha modificado un documento.
+
+### Paso 4. Consultar de nuevo
+
+```javascript
+db.productos_mantenimiento_demo.find({precio: 10})
+db.productos_mantenimiento_demo.find({precio: 30})
+```
+
+La primera consulta ya no encuentra el producto `A` y la segunda sí. No hemos reconstruido manualmente el índice.
+
+### Qué explica el resultado
+
+MongoDB mantiene la correspondencia entre valores indexados y documentos. **Esa es una razón importante del coste adicional de escritura de los índices:** la búsqueda se beneficia de una estructura que también hay que mantener cuando cambian los datos.
+
+Para observar una consulta con índice sin depender de las decisiones del optimizador sobre una colección diminuta, puedes usar:
+
+```javascript
+db.productos_mantenimiento_demo.find({precio: 30})
+  .hint("ix_precio")
+  .explain("executionStats")
+```
+
+Esto es una demostración de consistencia y mecanismo, no un benchmark de rendimiento.
+
+---
+
+## 44. Un array indexado no significa documentos duplicados
+
+Los índices multikey pueden mantener entradas para varios elementos de un array. Eso no significa que MongoDB almacene la misma venta varias veces.
+
+### Paso 1. Crear datos pequeños y claros
+
+```javascript
+use curso_indices
+db.etiquetas_mini_demo.drop()
+
+db.etiquetas_mini_demo.insertMany([
+  {sku: "A", etiquetas: ["web", "promocion"]},
+  {sku: "B", etiquetas: ["web"]},
+  {sku: "C", etiquetas: ["tienda"]}
+])
+```
+
+### Paso 2. Contar los documentos
+
+```javascript
+db.etiquetas_mini_demo.countDocuments({})
+```
+
+Esperamos **3 documentos**.
+
+### Paso 3. Crear el índice multikey
+
+```javascript
+db.etiquetas_mini_demo.createIndex(
+  {etiquetas: 1},
+  {name: "ix_etiquetas_mini"}
+)
+```
+
+### Paso 4. Buscar una etiqueta
+
+```javascript
+db.etiquetas_mini_demo.find({etiquetas: "web"})
+```
+
+Debes obtener los productos `A` y `B`. El producto `A` también contiene `"promocion"`, pero no aparece duplicado en la colección.
+
+### Paso 5. Observar el trabajo del índice
+
+```javascript
+db.etiquetas_mini_demo.find({etiquetas: "web"})
+  .hint("ix_etiquetas_mini")
+  .explain("executionStats")
+```
+
+Compara `nReturned` y `totalKeysExamined`. No son necesariamente el mismo concepto en todos los casos, aunque aquí la búsqueda sea muy pequeña.
+
+### Explicación final
+
+Un índice multikey crea entradas apropiadas para localizar documentos por elementos de su lista; el resultado sigue siendo un conjunto de **documentos**. La estructura indexada y los documentos almacenados son niveles diferentes de la base de datos.
+
+---
+
 ## Resolución de incidencias frecuentes
 
 **«docker: command not found».** No estás ejecutando Docker desde una terminal que tenga disponible el programa; revisa instalación y ruta.
