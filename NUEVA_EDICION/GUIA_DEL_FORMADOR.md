@@ -61,7 +61,7 @@ Comprueba que `lectorlab` puede leer y que su escritura es rechazada usando las 
 | 145–165 | Muestra TLS y X.509 conceptualmente; opcionalmente usa demostración ya preparada | Explica por qué un canal cifrado no concede escritura |
 | 165–180 | Evaluación breve y puesta en común de resultados | Justifica qué cambió y qué pruebas respaldan su explicación |
 
-Estos tiempos pertenecen únicamente a la guía del formador. Los cuadernos completos contienen ampliaciones para estudio autónomo: no son 195 páginas que deban leerse dentro de las tres horas.
+Estos tiempos pertenecen únicamente a la guía del formador. Los cuadernos completos contienen ampliaciones para estudio autónomo: no son páginas que deban leerse dentro de las tres horas.
 
 ## 4. Estrategia pedagógica
 
