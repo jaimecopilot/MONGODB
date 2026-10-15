@@ -1135,3 +1135,242 @@ No entregues un JSON enorme sin explicación. Prepara un resumen para la persona
 - «La pantalla C solo necesita algunos campos. Una proyección adecuada puede evitar transferir datos innecesarios y un índice estudiado podría cubrir la consulta».
 
 **Evaluación:** si alguien que no conoce `mongosh` puede entender qué problema resolviste, has completado la parte profesional del ejercicio. Si solo ve una lista de comandos, todavía falta tu explicación.
+
+
+---
+
+# Laboratorio 9 — Unicidad condicionada: cupones activos e índices parciales
+
+## La historia de negocio
+
+Una tienda emite códigos promocionales. Quiere impedir que existan **dos promociones activas con el mismo código**. Sin embargo, un cupón de una campaña anterior puede estar inactivo y su código podría reutilizarse cuando la política comercial lo permita.
+
+La regla correcta no es «todos los códigos de toda la historia deben ser únicos». Es una regla **condicionada por el estado activo**.
+
+Este laboratorio enseña a traducir una frase de negocio en un índice `unique` con una condición `partialFilterExpression`. También enseña que una actualización puede infringir la restricción aunque la inserción original fuera válida.
+
+### Paso 1. Crear una colección independiente
+
+Abre `mongosh` en la instancia de índices:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro del shell:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.cupones_clase.drop();
+```
+
+La orden `drop` elimina **solo** la colección ficticia `cupones_clase`. No modifica las ventas principales.
+
+### Paso 2. Formular la restricción
+
+Queremos que el campo `codigo` sea único **solo cuando `activo` sea verdadero**. Creamos:
+
+```javascript
+d.cupones_clase.createIndex(
+  {codigo:1},
+  {
+    name:"ix_codigo_activo",
+    unique:true,
+    partialFilterExpression:{activo:true}
+  }
+);
+```
+
+Piensa en las piezas:
+- `codigo:1` define la clave del índice.
+- `unique:true` prohíbe duplicar claves dentro del conjunto afectado.
+- `partialFilterExpression` determina qué documentos pertenecen a ese conjunto.
+
+No estamos diciendo que `activo` sea parte de la clave ordenada; lo usamos como **condición de pertenencia al índice**.
+
+### Paso 3. Introducir un cupón activo
+
+```javascript
+d.cupones_clase.insertOne({
+  _id:1,
+  codigo:"PROMO7",
+  activo:true,
+  descripcion:"Campaña actual"
+});
+```
+
+Debe insertarse correctamente. El índice incorpora el valor `PROMO7` porque el documento cumple el filtro `activo:true`.
+
+### Paso 4. Introducir un cupón inactivo con el mismo código
+
+```javascript
+d.cupones_clase.insertOne({
+  _id:2,
+  codigo:"PROMO7",
+  activo:false,
+  descripcion:"Campaña antigua"
+});
+```
+
+Este documento **no cumple el filtro parcial** y, bajo la regla que acabamos de definir, no entra en el conjunto de claves cuya unicidad controlamos. Se espera una inserción permitida.
+
+**Comprueba el estado de la colección:**
+
+```javascript
+d.cupones_clase.find({codigo:"PROMO7"}).toArray()
+```
+
+Deben verse dos cupones con el mismo código, uno activo y otro inactivo. No es una contradicción: el requisito no prohibía todos los duplicados históricos.
+
+### Paso 5. Intentar activar el duplicado
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:2},
+  {$set:{activo:true}}
+);
+```
+
+**Resultado esperado:** rechazo por violación de unicidad. La actualización haría que el segundo cupón entrara en el conjunto indexado donde ya existe otro activo con el mismo código.
+
+Este paso muestra una propiedad fundamental: **los índices afectan también a las actualizaciones**. Una restricción sobre datos de negocio no se limita al momento de insertar.
+
+### Paso 6. Comprobar que el documento sigue inactivo
+
+```javascript
+d.cupones_clase.findOne({_id:2})
+```
+
+El valor `activo` debe continuar siendo falso si la actualización se rechazó. Así verificamos que el rechazo protegió la integridad de los documentos.
+
+### Paso 7. Ensayar la reutilización después de desactivar el original
+
+Desactiva el primer cupón:
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:1},
+  {$set:{activo:false}}
+);
+```
+
+Ahora intenta activar el segundo:
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:2},
+  {$set:{activo:true}}
+);
+```
+
+**Resultado esperado:** esta vez sí puede activarse, porque ya no existe otro cupón activo con `PROMO7`. Consulta ambos documentos y comprueba que la regla final se cumple.
+
+### Paso 8. Explicar la diferencia entre índice simple, único y parcial
+
+| Diseño | Qué resolvería | Limitación respecto al negocio |
+|---|---|---|
+| `{codigo:1}` normal | Facilitar búsquedas por código | No impide duplicados |
+| `{codigo:1}` unique general | Impedir duplicados en toda la colección | Puede ser demasiado restrictivo para cupones antiguos |
+| Unique con filtro `activo:true` | Impedir coincidencias entre cupones activos | Depende de que `activo` esté modelado correctamente |
+
+**Debate:** ¿qué debe suceder si un documento no tiene campo `activo`? No basta con dejar que la aplicación «lo interprete como quiera». Hay que definir una política coherente para ese estado.
+
+### Paso 9. Comprobar de forma automática
+
+El repositorio contiene un archivo de prueba complementario, `lab/17_partial_unique_guiado.js`, que ejecuta el escenario con datos de ejemplo y comprueba los rechazos esperados. Puedes ejecutarlo en una colección aislada desde la terminal:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/17_partial_unique_guiado.js
+```
+
+**No ejecutes este script antes de guardar tus observaciones manuales**: utiliza su propia colección de prueba y la recrea para garantizar un punto de partida conocido.
+
+### Evaluación
+
+Una alumna propone crear `{codigo:1,activo:1}` con `unique:true` y afirma que así resuelve exactamente el problema. ¿Es equivalente a nuestro diseño parcial?
+
+Piénsalo: un índice único compuesto sobre esas dos claves puede restringir también que existan dos cupones **inactivos** con el mismo código. La regla de negocio solo exigía unicidad entre los activos. Comprender esta diferencia es más importante que recordar de memoria la palabra `partialFilterExpression`.
+
+---
+
+# Laboratorio 10 — Investigar un índice que nadie utiliza
+
+## El encargo
+
+Un administrador dice: «He creado el índice `ix_cliente` y la búsqueda sigue comportándose como antes. ¿Está MongoDB ignorando mi trabajo?». No vamos a responder que el índice está mal sin observar la consulta. Puede ser un índice poco útil, una pregunta distinta de la que motivó su creación, un plan de consulta razonable o una colección demasiado pequeña.
+
+### Paso 1. Identificar la consulta real
+
+Supongamos que la pantalla pide ventas por `estado`, no por `clienteId`:
+
+```javascript
+db.ventas.find({estado:"pagada"}).limit(100)
+```
+
+Aunque exista `ix_cliente`, este índice está organizado por otro campo. Su mera existencia no garantiza utilidad para esta consulta.
+
+### Paso 2. Consultar índices reales
+
+Dentro de `mongosh`:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.getIndexes()
+```
+
+Busca:
+- nombre del índice;
+- campos y direcciones;
+- propiedades como `unique` u opciones adicionales.
+
+No deduzcas que los índices con nombres largos son mejores. El nombre sirve para identificarlos; son su clave y opciones las que determinan su función.
+
+### Paso 3. Inspeccionar el plan sin forzar nada
+
+```javascript
+c.find({estado:"pagada"}).limit(100).explain("executionStats")
+```
+
+Observa el plan ganador y los contadores. Si devuelve cien documentos, no significa automáticamente que examinará cien; podría necesitar recorrer más claves o documentos para localizar esos cien.
+
+### Paso 4. Formular una hipótesis
+
+Si el optimizador no elige `ix_cliente`, una hipótesis razonable es que la consulta no contiene un filtro que aproveche su ordenación. Si elige otro índice, quizá este sirva mejor a los criterios consultados.
+
+No debes cambiar código hasta expresar qué esperabas del índice y por qué.
+
+### Paso 5. Comprobar con una consulta del campo indexado
+
+```javascript
+c.find({clienteId:809}).limit(10).explain("executionStats")
+```
+
+Compara plan y contadores. La nueva consulta ya pregunta por el campo para el que se creó `ix_cliente`. **No compares los tiempos de estas dos consultas como si fueran antes/después del mismo experimento**: acabas de cambiar el filtro. Utilízalas únicamente para mostrar que un índice está vinculado a necesidades concretas.
+
+### Paso 6. Ensayar una retirada sin destruir el índice
+
+En una colección de laboratorio puedes ocultar temporalmente `ix_cliente`:
+
+```javascript
+c.hideIndex("ix_cliente")
+```
+
+Repite la consulta por cliente, pero **sin `hint`**, para comprobar cómo planifica MongoDB sin poder utilizar ese índice oculto. Después restáuralo:
+
+```javascript
+c.unhideIndex("ix_cliente")
+```
+
+Ocultar no reduce automáticamente el espacio ocupado ni el mantenimiento de ese índice; es un mecanismo de estudio de planes y gestión.
+
+### Paso 7. Registrar una decisión argumentada
+
+Completa:
+- Consulta que motivó el índice: ______.
+- Índice realmente definido: ______.
+- Plan sin forzar: ______.
+- Documentos y claves examinados: ______.
+- ¿La consulta utiliza un campo compatible con el índice?: ______.
+- ¿Qué otras consultas podrían necesitarlo?: ______.
+
+**Conclusión:** decidir si eliminar un índice exige comprender el conjunto de consultas de la aplicación, no una única medición. En producción los cambios deben estudiarse con datos de uso, pruebas y procedimientos de recuperación.
