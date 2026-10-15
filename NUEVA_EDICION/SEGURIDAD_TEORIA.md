@@ -586,6 +586,154 @@ No memorices «A = red, B = rol, C = TLS». Explica qué amenaza aborda cada con
 
 ---
 
+## 21. SCRAM paso a paso sin convertirlo en una clase de criptografía
+
+La autenticación con contraseña puede parecer trivial: «el cliente manda el usuario y la contraseña; el servidor compara». Ese modelo simplificado oculta propiedades importantes del mecanismo SCRAM.
+
+El nombre significa *Salted Challenge Response Authentication Mechanism*. MongoDB utiliza SCRAM como mecanismo habitual para las cuentas basadas en contraseña. En vez de enseñar una imagen en la que el servidor recibe sin más una contraseña en texto plano, conviene comprender la idea de **desafío y respuesta**.
+
+### Un recorrido conceptual
+
+1. El cliente indica qué identidad quiere autenticar y en qué base se verifica.
+2. Cliente y servidor intercambian valores que permiten construir una prueba criptográfica.
+3. Se utiliza información asociada a la contraseña y datos de sal propios del usuario.
+4. Si las comprobaciones son correctas, la identidad puede considerarse autenticada.
+5. Solo entonces la autorización decide si la operación solicitada es válida.
+
+Este proceso incorpora características como valores de sal aleatorios por usuario y un factor de trabajo configurable. No significa que una contraseña débil pase a ser una contraseña segura, ni sustituye la necesidad de TLS para la comunicación.
+
+### Por qué el nombre de usuario no es suficiente
+
+Dos personas pueden conocer el nombre `adminlab`. Eso no significa que ambas puedan demostrar ser el administrador. La contraseña y el contexto de autenticación son piezas esenciales.
+
+### Por qué no basta saber la contraseña de otra base
+
+La cuenta se registra en un contexto de autenticación. Si el cliente busca el usuario en otra base, puede fallar incluso aunque haya escrito correctamente su contraseña.
+
+### Ejemplo de seguridad que sí puedes explicar
+
+«La contraseña permite demostrar una identidad mediante SCRAM, pero la identidad no implica acceso universal. MongoDB comprueba después las operaciones contra los roles que tiene asignados».
+
+---
+
+## 22. La seguridad de Docker tiene dos perspectivas de red
+
+El curso ejecuta MongoDB en contenedores. En el ordenador del alumno publicamos puertos con direcciones como:
+
+```text
+127.0.0.1:27018:27017
+```
+
+Se lee así: el puerto 27018 del host se dirige al puerto 27017 del contenedor. El vínculo con `127.0.0.1` restringe cómo se publica hacia las interfaces del equipo.
+
+### Qué se protege con esta configuración
+
+La publicación en loopback reduce la exposición del servicio desde otras máquinas de la red del host. Es adecuada para un laboratorio individual con datos de demostración.
+
+### Qué NO se garantiza
+
+El contenedor también puede comunicarse con otros contenedores de la red de Compose conforme a su configuración. Por tanto, no debe afirmarse que `127.0.0.1` «hace imposible cualquier conexión salvo desde el ordenador» en todos los sentidos. La red interna de Docker constituye otro plano de conectividad.
+
+### Por qué mantenemos autenticación en la instancia de seguridad
+
+Aunque el puerto externo esté limitado a loopback, la instancia protegida debe exigir identidad y comprobar roles. Así podemos observar que distintas capas se complementan: red, autenticación y autorización.
+
+### Un error habitual de administración
+
+Para resolver una conexión fallida, alguien modifica la publicación de puerto a `0.0.0.0` sin comprenderlo. Puede hacer que una herramienta remota alcance el servicio, pero también aumenta superficie de ataque. Antes de cambiar una regla de red hay que definir quién necesita realmente ese acceso.
+
+---
+
+## 23. ¿Por qué autenticar en una base y leer en otra?
+
+Supongamos que un administrador se creó en la base `admin`. Un principiante se conecta correctamente y luego usa `use curso_seguridad`. ¿Ha cambiado de usuario?
+
+No. Ha cambiado el contexto de la consulta, no la identidad autenticada.
+
+### El ejemplo
+
+```bash
+mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+Después, dentro de `mongosh`:
+
+```javascript
+use curso_seguridad
+db.secretos.findOne()
+```
+
+La segunda orden solicita datos de otra base, pero los privilegios siguen estando asociados a la identidad autenticada previamente.
+
+### Distinguir tres componentes
+
+**Base de autenticación:** allí se encuentra la cuenta que verifica el servidor.  
+**Base de trabajo:** contiene los documentos sobre los que se ejecuta la operación.  
+**Base indicada en el rol:** delimita el recurso autorizado para determinadas acciones.
+
+Pueden coincidir, pero no hay ninguna obligación conceptual de que sean idénticas.
+
+### Por qué surgen errores difíciles de interpretar
+
+Una aplicación puede disponer de la contraseña correcta y, sin embargo, apuntar su `authSource` a la base equivocada. El resultado será un problema de autenticación, no un problema de permisos. Darle el rol `root` no corrige ese error de fondo.
+
+Este ejemplo muestra por qué el diagnóstico debe seguir el orden: conexión, identidad, autorización y finalmente operación.
+
+---
+
+## 24. TLS no elimina el riesgo de una cuenta demasiado poderosa
+
+Imagina una aplicación que usa TLS, valida bien el certificado del servidor y se autentica con una cuenta `root`. La conexión está protegida frente a ciertas amenazas de red, pero esa aplicación conserva facultades de administración que quizá no necesita.
+
+Si aparece un error de programación o se filtran sus credenciales, esas facultades excesivas aumentan el alcance del incidente.
+
+### La separación correcta
+
+- TLS protege la comunicación.
+- SCRAM o X.509 permiten identificar al cliente.
+- RBAC delimita las operaciones que esa identidad puede realizar.
+
+Son capas independientes. **No es posible sustituir el mínimo privilegio con cifrado de transporte.**
+
+### Un ejemplo de política
+
+El sistema de informes usa una cuenta con `read`. El servicio de pedidos utiliza una cuenta con `readWrite` sobre el ámbito que necesita. La administración de usuarios se realiza desde otra identidad reservada para tareas administrativas.
+
+### Cómo se demuestra
+
+No basta con inspeccionar la configuración. Probamos una lectura exitosa y una escritura rechazada con la cuenta lectora; probamos una escritura permitida con la cuenta editora. Después comprobamos TLS por separado.
+
+El aprendizaje clave es que los resultados demuestran propiedades distintas y no se pueden intercambiar.
+
+---
+
+## 25. Un incidente completo, desde el error hasta la decisión correcta
+
+Un alumno del curso recibe el siguiente relato: «Alguien se conectó a la base, leyó un documento y al intentar insertar obtuvo una denegación. El administrador cambió el rol del usuario para que pudiera insertar. Más tarde se descubrió que esa cuenta solo debía consultar informes».
+
+### Analizar lo ocurrido
+
+La conexión puede haber sido legítima. La lectura estaba permitida. La denegación de inserción probablemente era correcta. El cambio de rol no solucionó un problema técnico: **introdujo un permiso innecesario**.
+
+### Preguntas que un responsable debe formular
+
+- ¿Qué cuenta se utilizó?
+- ¿Quién debería ser capaz de modificar los datos?
+- ¿Qué operación estaba prevista en el flujo de negocio?
+- ¿El error se produjo durante la autenticación o durante la autorización?
+- ¿Hubo una ampliación de privilegios sin autorización?
+- ¿Qué comprobaciones demostrarían que se restauró la política correcta?
+
+### Respuesta profesional
+
+La cuenta lectora debe recuperar únicamente sus permisos de lectura. El servicio que necesite escribir debe utilizar una identidad distinta, con el rol y el ámbito adecuados. Después se repiten pruebas positivas y negativas.
+
+### Lección final
+
+La seguridad no consiste en lograr que todos los comandos funcionen. Consiste en conseguir que funcionen **solo los comandos que corresponden a cada identidad**, sin destruir la protección para ocultar errores.
+
+---
+
 ## Glosario de seguridad
 
 **Autenticación:** verificación de identidad. **Autorización:** comprobación de privilegios para una acción. **RBAC:** modelo de permisos agrupados por roles. **SCRAM:** mecanismo de desafío/respuesta para autenticación con contraseña. **`authSource`:** base donde se verifica una cuenta. **TLS:** protección de comunicación en tránsito. **X.509:** estándar de certificados que puede emplearse para autenticar clientes. **CA:** autoridad que firma certificados. **LDAP:** protocolo de directorio, con integración autogestionada Enterprise obsoleta en MongoDB 8.0. **Cifrado en reposo:** protección de información almacenada. **Mínimo privilegio:** otorgar solo los permisos necesarios.
