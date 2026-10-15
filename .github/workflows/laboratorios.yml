@@ -75,3 +75,26 @@ jobs:
       - name: Apagar
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  manuales:
+    name: "Secuencia literal de scripts de indices del manual"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Arrancar MongoDB
+        env:
+          MONGO_ADMIN_PASSWORD: docente-efimero-sin-exposicion
+        run: docker compose up -d --wait mongo-indices
+      - name: Probar scripts docentes en orden
+        run: |
+          for script in 01_cargar_ventas 00_preflight 02_antes 03_crear_indices 04_despues 05_tipos 06_unique_ttl 07_ver_ttl 10_verificacion_indices 12_restaurar_indices; do
+            echo "=== $script ==="
+            docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file "/lab/$script.js"
+          done
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
