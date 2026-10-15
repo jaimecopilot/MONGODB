@@ -1,0 +1,5 @@
+# Credenciales, certificados y datos efímeros
+.env
+certs/
+resultados/
+*.log

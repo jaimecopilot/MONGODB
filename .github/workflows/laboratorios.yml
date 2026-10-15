@@ -1,0 +1,56 @@
+name: Laboratorios MongoDB 8.0
+on:
+  push:
+    branches: [main, laboratorio/github-actions]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  indices:
+    name: "Indices - ${{ matrix.ventas }} ventas"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        ventas: [200000, 1000000]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Credencial efimera de laboratorio
+        run: echo "MONGO_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+      - name: Ejecutar MongoDB Community
+        run: docker compose up -d --wait mongo-indices
+      - name: Comprobar indices
+        env:
+          VENTAS: ${{ matrix.ventas }}
+        run: docker compose exec -T -e VENTAS="$VENTAS" mongo-indices mongosh --quiet --file /lab/indices.js
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+  seguridad:
+    name: "Seguridad - SCRAM, TLS y X509"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Credenciales efimeras
+        run: |
+          echo "MONGO_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "LAB_READER_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "LAB_WRITER_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+      - name: Preparar certificados
+        run: bash scripts/generar-certificados.sh
+      - name: Ejecutar contenedores
+        run: docker compose up -d --wait mongo-seguridad mongo-tls
+      - name: Comprobar seguridad
+        run: bash scripts/probar-seguridad.sh
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-seguridad mongo-tls
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
