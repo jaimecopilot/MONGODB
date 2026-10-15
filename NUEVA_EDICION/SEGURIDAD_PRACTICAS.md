@@ -274,7 +274,7 @@ Introduce la clave cuando sea solicitada.
 Sal de `mongosh` con `exit` y, desde la **terminal**, ejecuta:
 
 ```bash
-docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password --file /lab/08_configurar_seguridad.js
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --file /lab/08_configurar_seguridad.js --password
 ```
 
 La opción `--file` carga instrucciones guardadas en el repositorio. El script prepara la colección `curso_seguridad.secretos` y crea `lectorlab` y `escritorlab` con contraseñas tomadas del entorno del contenedor.
