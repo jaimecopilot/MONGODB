@@ -167,7 +167,7 @@ En `mongosh`, conectados con privilegios administrativos, podemos crear una iden
 const curso = db.getSiblingDB("curso_seguridad");
 curso.createUser({
   user: "lectorlab",
-  pwd: passwordPrompt(),
+  pwd: process.env.LAB_READER_PASSWORD,
   roles: [{ role: "read", db: "curso_seguridad" }]
 });
 ```
