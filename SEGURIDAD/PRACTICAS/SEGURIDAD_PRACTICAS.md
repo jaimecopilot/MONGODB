@@ -168,7 +168,7 @@ Sal de `mongosh` y detén el servicio desde la terminal:
 docker compose stop mongo-seguridad
 ```
 
-Esto conserva los datos del contenedor. No utilices `down --volumes` sin comprender que elimina volúmenes y datos de laboratorio.
+Este comando detiene el contenedor y conserva sus datos. La nueva configuración del proyecto utiliza **volúmenes Docker con nombre** para almacenar los datos de cada instancia; `docker compose down` elimina contenedores, pero no esos volúmenes con nombre. **`docker compose down --volumes` sí los elimina** y perderás los datos, usuarios y documentos de práctica. No lo ejecutes salvo que quieras reinicializar conscientemente el laboratorio.
 
 **Siguiente práctica:** cifrado TLS y certificados X.509, comenzando por la diferencia entre canal seguro e identidad del cliente.
 
@@ -759,7 +759,7 @@ db.getSiblingDB("curso_seguridad").secretos.insertOne({_id:"temporal-1"})
 Sal de la sesión del usuario y vuelve a entrar como administrador. Dentro del shell administrativo:
 
 ```javascript
-s = db.getSiblingDB("curso_seguridad")
+const s = db.getSiblingDB("curso_seguridad");
 s.grantRolesToUser(
   "temporalclase",
   [{role:"readWrite",db:"curso_seguridad"}]
