@@ -550,3 +550,377 @@ Redacta cuatro frases:
 4. Qué resultado negativo debe obtener el usuario de certificado si intenta insertar.
 
 **Ampliación conceptual:** distingue la función de LDAP, el cifrado de datos en reposo y las copias de seguridad. No tenemos un entorno Enterprise dentro de este laboratorio; por tanto, esos mecanismos no se presentarán como probados.
+
+
+---
+
+# Laboratorio 5 — Crear un rol propio: una cuenta solo puede leer una colección
+
+## La necesidad real
+
+Hasta ahora hemos utilizado el rol predefinido `read`. Con él, `lectorlab` puede consultar datos de su base según los privilegios que otorga ese rol. Pero imaginemos un requisito más restrictivo:
+
+> «El equipo de control solo puede consultar la colección `secretos`, no cualquier otra colección de la base `curso_seguridad`».
+
+Esta diferencia es importante. El permiso de lectura sobre **toda una base** no es idéntico al permiso sobre **una colección concreta**.
+
+Vamos a crear un rol personalizado de lectura para una sola colección y una cuenta distinta que lo utilice. No modificaremos los roles de `lectorlab` o `escritorlab` para que las prácticas anteriores sigan siendo repetibles.
+
+### Paso 1. Preparar el entorno protegido
+
+Abre PowerShell o Bash en la raíz del proyecto:
+
+```bash
+docker compose up -d --wait mongo-seguridad
+```
+
+Accede como administrador:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+Introduce la contraseña administrativa de tu archivo local `.env`. Dentro de `mongosh` confirma que estás conectado:
+
+```javascript
+db.adminCommand({ping:1})
+```
+
+La respuesta `ok:1` confirma comunicación con el servidor; no sustituye las pruebas de permisos posteriores.
+
+### Paso 2. Preparar dos colecciones claramente distintas
+
+Dentro de `mongosh`:
+
+```javascript
+const s = db.getSiblingDB("curso_seguridad");
+s.secretos.findOne({_id:"demo-1"});
+s.publicaciones_demo.updateOne(
+  {_id:"publica-1"},
+  {$set:{titulo:"Información de ensayo"}},
+  {upsert:true}
+);
+```
+
+El `upsert` insertará el documento si todavía no existe o lo actualizará si existe. Estamos utilizando únicamente datos ficticios de laboratorio.
+
+Tenemos dos colecciones:
+- `secretos`: la que permitiremos consultar.
+- `publicaciones_demo`: la que el nuevo usuario **no debería** poder leer.
+
+### Paso 3. Definir un rol personalizado
+
+```javascript
+s.createRole({
+  role:"soloSecretosClase",
+  privileges:[
+    {
+      resource:{db:"curso_seguridad",collection:"secretos"},
+      actions:["find"]
+    }
+  ],
+  roles:[]
+});
+```
+
+Descompongámoslo:
+
+- `role` asigna un nombre a la definición.
+- `privileges` contiene permisos explícitos.
+- `resource` indica la base y colección permitidas.
+- `actions:["find"]` limita la acción a consulta de documentos.
+- `roles:[]` no incorpora otros roles heredados.
+
+**No hemos concedido `insert`, `update`, `remove` ni privilegios sobre `publicaciones_demo`.**
+
+Si el comando informa de que el rol ya existe, seguramente repetiste el laboratorio. Pide información con `s.getRole("soloSecretosClase",{showPrivileges:true})` en lugar de borrarlo automáticamente.
+
+### Paso 4. Crear la cuenta de prueba
+
+```javascript
+s.createUser({
+  user:"auditorclase",
+  pwd:passwordPrompt(),
+  roles:[{role:"soloSecretosClase",db:"curso_seguridad"}]
+});
+```
+
+Introduce una contraseña **exclusiva del ejercicio**. No utilices la de `adminlab` ni la escribas en el documento que entregarás.
+
+Si la cuenta ya existe, examina `s.getUser("auditorclase")`. No confundas un error por duplicidad de nombre con un error de permisos.
+
+### Paso 5. Probar una lectura permitida
+
+Sal de `mongosh` con `exit`. Desde la terminal:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username auditorclase --authenticationDatabase curso_seguridad --password
+```
+
+Introduce la contraseña que asignaste. Dentro del shell:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+**Resultado esperado:** aparece el documento ficticio, porque el rol contiene la acción `find` sobre esta colección.
+
+### Paso 6. Probar una lectura que debe rechazarse
+
+Sin cambiar de cuenta:
+
+```javascript
+db.getSiblingDB("curso_seguridad").publicaciones_demo.findOne({_id:"publica-1"})
+```
+
+**Resultado esperado:** error de autorización. Hemos demostrado un permiso más preciso que el rol `read` aplicado a toda la base.
+
+Si puedes consultar ambas colecciones, revisa qué roles reales tiene `auditorclase`. No declares el ejercicio aprobado hasta explicar por qué una cuenta con un supuesto rol limitado puede acceder a recursos adicionales.
+
+### Paso 7. Probar una inserción prohibida
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({
+  _id:"no-autorizado-clase",
+  texto:"prueba prohibida"
+})
+```
+
+También debe rechazarse. Aunque el usuario pueda leer `secretos`, no tiene acción `insert`.
+
+### Paso 8. Documentar la matriz de permisos
+
+| Cuenta | Leer secretos | Leer publicaciones_demo | Escribir secretos |
+|---|---|---|---|
+| `auditorclase` con rol nuevo | Sí | No | No |
+| `lectorlab` con rol read | Sí | Sí | No |
+| `escritorlab` con rol readWrite | Sí | Sí | Sí |
+
+La segunda y tercera fila describen lo que esperamos de los roles anteriores en esta base. Si tu instalación no tiene las cuentas preparadas, realiza primero el laboratorio 1.
+
+### Paso 9. Preguntas de reflexión
+
+1. ¿Qué diferencia hay entre asignar un rol `read` sobre la base completa y `find` sobre una única colección?
+2. ¿Por qué el nombre del rol `soloSecretosClase` no basta para demostrar lo que permite?
+3. ¿Qué riesgo aparecería si le otorgaras el rol `root` «para asegurarte de que funcione»?
+4. ¿Qué prueba negativa necesitas para confirmar que el rol es realmente restrictivo?
+
+**Conclusión:** el mínimo privilegio requiere concretar recursos y acciones, no simplemente crear usuarios con nombres que suenen seguros.
+
+---
+
+# Laboratorio 6 — Cambiar permisos con control y comprobar que las sesiones reflejan la política
+
+## Propósito
+
+A veces un permiso debe ampliarse temporalmente, por ejemplo para que un empleado pueda corregir datos durante una ventana autorizada. También debe poder retirarse después. Vamos a razonar sobre el ciclo de vida de un privilegio sin modificar la cuenta principal `lectorlab` del curso.
+
+**Aviso:** esta actividad altera roles y usuarios de laboratorio. No la ejecutes en un sistema real ni sobre una cuenta ajena.
+
+### Paso 1. Crear una identidad temporal
+
+En una sesión administrativa como en el laboratorio anterior:
+
+```javascript
+const s = db.getSiblingDB("curso_seguridad");
+s.createUser({
+  user:"temporalclase",
+  pwd:passwordPrompt(),
+  roles:[{role:"read",db:"curso_seguridad"}]
+});
+```
+
+Su estado inicial es claro: puede consultar, pero no escribir.
+
+### Paso 2. Verificar antes de cambiar nada
+
+Cierra la sesión administrativa y conecta como `temporalclase`:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username temporalclase --authenticationDatabase curso_seguridad --password
+```
+
+Comprueba lectura permitida:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+Después intenta:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({_id:"temporal-1"})
+```
+
+**Resultado esperado:** denegación. Si este caso no se cumple, carecerá de sentido estudiar el cambio de permisos.
+
+### Paso 3. Autorizar temporalmente escritura
+
+Sal de la sesión del usuario y vuelve a entrar como administrador. Dentro del shell administrativo:
+
+```javascript
+s = db.getSiblingDB("curso_seguridad")
+s.grantRolesToUser(
+  "temporalclase",
+  [{role:"readWrite",db:"curso_seguridad"}]
+)
+```
+
+Esta operación añade el rol `readWrite`. No es lo mismo que sustituir por completo la cuenta ni borrar el rol `read` anterior. Si vas a cambiar privilegios en una aplicación real, debes estudiar además cuándo las sesiones existentes perciben los cambios y cómo se gestionan sus credenciales.
+
+### Paso 4. Verificar el cambio con una conexión nueva
+
+Cierra la conexión administrativa y abre una **nueva sesión** como `temporalclase` para evitar dudas de estado de autenticación:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username temporalclase --authenticationDatabase curso_seguridad --password
+```
+
+Ahora intenta insertar `{_id:"temporal-1",texto:"autorizado durante la ventana"}`.
+
+**Resultado esperado:** operación permitida si el rol se asignó correctamente. Si existe ya un documento con ese identificador por una ejecución anterior, usa otro identificador o limpia únicamente tus datos de prueba, no toda la colección.
+
+### Paso 5. Retirar el privilegio temporal
+
+Sal y vuelve como administrador:
+
+```javascript
+const s = db.getSiblingDB("curso_seguridad");
+s.revokeRolesFromUser(
+  "temporalclase",
+  [{role:"readWrite",db:"curso_seguridad"}]
+);
+```
+
+La cuenta conserva su rol de lectura. No hemos bloqueado toda la identidad: hemos retirado una capacidad que dejó de ser necesaria.
+
+### Paso 6. Comprobar otra vez la restricción
+
+Conecta de nuevo como `temporalclase` y prueba una inserción con un identificador nuevo:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({_id:"temporal-prohibido"})
+```
+
+**Resultado esperado:** denegación. Comprueba también que la lectura sigue siendo posible.
+
+La secuencia completa debería ser:
+
+| Estado | Leer | Insertar |
+|---|---|---|
+| Inicial | Sí | No |
+| Permiso temporal concedido | Sí | Sí |
+| Permiso retirado | Sí | No |
+
+### Paso 7. ¿Qué demuestra realmente el ejercicio?
+
+No basta con que el administrador ejecute `grantRolesToUser` y `revokeRolesFromUser` sin errores. Debemos comprobar **desde la cuenta afectada** que las operaciones permitidas y denegadas corresponden con la política.
+
+**Pregunta de evaluación:** ¿por qué usarías una cuenta temporal del laboratorio en lugar de ampliar directamente los poderes de `lectorlab` para todas las demás prácticas?
+
+---
+
+# Laboratorio 7 — Leer el estado del servidor sin confundirlo con una auditoría de seguridad
+
+## El objetivo
+
+Imagina que un compañero dice: «La conexión falla y no sé si es Docker, MongoDB o mis credenciales». Tu primera tarea será recopilar información de diagnóstico **sin exponer secretos** y sin cambiar permisos al azar.
+
+### Paso 1. Comprobar contenedores
+
+Desde PowerShell o Bash en la raíz del proyecto:
+
+```bash
+docker compose ps
+```
+
+Anota qué servicios están encendidos. Un contenedor detenido no equivale a una contraseña equivocada: todavía no hemos alcanzado el servidor.
+
+### Paso 2. Revisar los últimos mensajes del servicio
+
+```bash
+docker compose logs --tail=80 mongo-seguridad
+```
+
+Busca errores de arranque, de inicialización o de configuración. No copies cientos de líneas sin interpretarlas. Anota la hora, el servicio y el fragmento que realmente ayude a comprender el problema.
+
+**Protección de información:** no pegues claves privadas, contraseñas ni variables de entorno sensibles en tu informe.
+
+### Paso 3. Separar tres evidencias
+
+- `docker compose ps` muestra el estado de los contenedores.
+- `db.adminCommand({ping:1})` confirma que el servidor responde en una conexión adecuada.
+- Una operación de lectura/escritura bajo una identidad concreta muestra si esa acción está autorizada.
+
+Son tres evidencias diferentes. La primera no demuestra quién se ha autenticado; la segunda no concede privilegios; la tercera depende de la cuenta y del recurso consultado.
+
+### Paso 4. Repasar un rechazo real
+
+Si `lectorlab` intenta insertar y recibe `Unauthorized`, debemos comprobar primero que sí consigue leer con esa misma sesión. Así aislamos el problema a los permisos de escritura, en vez de culpar a Docker o TLS.
+
+### Paso 5. No confundir registros técnicos con auditoría formal
+
+Los logs de un contenedor muestran información operativa. Un sistema completo de auditoría de datos requeriría registrar hechos relevantes con garantías de integridad, retención y consulta. Ver una línea de arranque de `mongod` no demuestra por sí solo quién modificó un documento.
+
+**Ejercicio:** redacta una respuesta de tres frases a alguien que muestra el log de arranque y afirma: «Ya hemos auditado todos los accesos». Explica qué falta comprobar.
+
+---
+
+# Laboratorio 8 — Caso integrador: diseñar una política y demostrarla
+
+## El escenario
+
+Una pequeña organización utiliza MongoDB para gestionar pedidos. Necesita:
+1. una aplicación que consulte pedidos;
+2. un servicio que registre pedidos nuevos;
+3. una persona autorizada para administrar usuarios;
+4. conexiones protegidas cuando la red lo exija;
+5. una manera de demostrar que las cuentas no pueden realizar operaciones ajenas a su función.
+
+Tu tarea es presentar una propuesta y **evidencias** en lugar de un conjunto de contraseñas y comandos copiados.
+
+### Paso 1. Dibujar los actores
+
+Escribe los nombres de los tres actores. Para cada uno especifica:
+- recursos que necesita consultar o modificar;
+- operaciones imprescindibles;
+- operaciones peligrosas que no deberían concederse;
+- forma de autenticación adecuada para el ejemplo;
+- entorno en el que se realiza la conexión.
+
+La cuenta de administración no debería ser la identidad normal de la aplicación de consulta.
+
+### Paso 2. Elegir roles mínimos
+
+Para la aplicación lectora, empieza estudiando `read` sobre la base de datos de pedidos. Para el servicio que registra operaciones, considera `readWrite` u otro rol más preciso si las operaciones realmente lo requieren. Para la administración, separa expresamente la responsabilidad de gestionar usuarios.
+
+No diseñes una política basándote solo en «siempre usamos `root` porque es más fácil».
+
+### Paso 3. Proponer cuatro pruebas
+
+Las pruebas deben incluir resultados tanto positivos como negativos:
+
+| Actor | Acción | Resultado esperado |
+|---|---|---|
+| Lector | Consultar pedido conocido | Permitido |
+| Lector | Eliminar pedido | Denegado |
+| Escritor | Insertar pedido válido | Permitido |
+| Escritor | Gestionar roles administrativos | Denegado |
+
+Si solo realizas las dos pruebas positivas, aún no sabes si existe una separación efectiva de privilegios.
+
+### Paso 4. Relacionar con TLS
+
+Explica por qué una conexión protegida con TLS puede ser necesaria aunque las cuentas tengan contraseñas. Después indica por qué TLS no basta para impedir que un usuario autenticado exceda sus permisos.
+
+### Paso 5. Producir un informe comprensible
+
+Tu informe final debe describir el propósito de cada cuenta, sus permisos, los resultados observados en las pruebas y cualquier límite del ejercicio.
+
+No está permitido escribir como conclusión «seguridad comprobada» si no has realizado las operaciones relevantes. Tampoco atribuyas a Community pruebas de LDAP o cifrado nativo que no hemos ejecutado.
+
+### Solución de referencia
+
+Una solución coherente separa tres identidades y limita sus privilegios. La cuenta lectora puede consultar y no modificar; la cuenta de escritura puede registrar pedidos, pero no administrar usuarios; la cuenta administrativa queda reservada a tareas especiales. Las conexiones y los secretos se protegen de acuerdo con el contexto. Cada permiso importante se comprueba con una operación real, incluida una denegación esperada.
+
+**Criterio de evaluación:** otra persona debe poder comprender qué protege tu propuesta, cuál es el límite de cada identidad y qué evidencia respalda tus afirmaciones.
