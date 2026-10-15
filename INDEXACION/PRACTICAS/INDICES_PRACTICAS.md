@@ -136,3 +136,197 @@ docker compose stop mongo-indices
 Este comando detiene el contenedor. No uses `docker compose down --volumes` salvo que quieras destruir los datos y volúmenes del laboratorio.
 
 **Autoevaluación:** ¿qué ocurriría si ejecutaras la carga del paso 4 después de haber creado el índice? ¿Por qué es importante respetar el orden de esta práctica?
+
+
+---
+
+# Laboratorio 2 — Índices compuestos, orden de campos y ESR
+
+## Qué vamos a hacer
+
+La persona responsable de ventas quiere **las diez ventas pagadas más recientes que superan los 500 euros**. Nuestra tarea no es copiar índices al azar. Vamos a escribir la consulta, comprobar que los resultados cumplen el encargo, elegir dos índices candidatos y comparar el trabajo real que exigen.
+
+**Duración:** esta actividad no está limitada a una cifra fija de minutos. Avanza cuando hayas comprendido el resultado de cada paso.
+
+### Requisitos y advertencias
+
+Debes tener el repositorio del curso en tu ordenador, Docker en funcionamiento y la instancia `mongo-indices` preparada.
+
+Esta práctica **continúa la anterior**: allí cargaste 200.000 ventas y ejecutaste `03_crear_indices.js`. Si acabas de empezar en un entorno limpio, abre la práctica 1 y sigue sus pasos de preparación, carga y creación de índices **antes** de continuar.
+
+**Nunca vuelvas a ejecutar `01_cargar_ventas.js` a mitad de esta práctica**: borrarías la colección y perderías sus índices, cambiando el experimento.
+
+## PASO 1 — Comprobar que estamos trabajando en el lugar correcto
+
+Abre PowerShell, Terminal o Bash **en la carpeta del repositorio** y ejecuta:
+
+```bash
+docker compose ps
+```
+
+Debes ver el servicio `mongo-indices` en ejecución. Si está detenido:
+
+```bash
+docker compose up -d --wait mongo-indices
+```
+
+No necesitas entrar a mano en `mongosh` para estos primeros pasos: pasaremos expresiones mediante `--eval` desde la terminal.
+
+Comprueba el número de ventas:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'db.getSiblingDB("curso_indices").ventas.countDocuments({})'
+```
+
+**Resultado esperado:** `200000` si mantuviste la carga de la primera práctica. Si aparece cero, aún no hay datos. Si aparece otro número que tú preparaste, puedes continuar, pero no compares tus cifras absolutas con las de un compañero con 200.000 ventas.
+
+## PASO 2 — Confirmar que los campos existen
+
+Pide a MongoDB un documento de ejemplo:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({estado:"pagada"}))'
+```
+
+Localiza `estado`, `fecha` e `importe`. Observa que:
+
+- `estado` es una cadena con valores como `pagada`.
+- `fecha` es una fecha almacenada como tipo fecha.
+- `importe` es numérico, de modo que podemos hacer comparaciones mayores/menores.
+
+**No avances si alguno de esos campos no aparece**: puede que estés en otra base de datos o que uses un conjunto de documentos diferente.
+
+## PASO 3 — Traducir el pedido de negocio a una consulta
+
+El encargo tiene cuatro partes:
+
+| Requisito | Expresión MongoDB |
+|---|---|
+| Solo pagadas | `estado:"pagada"` |
+| Importe superior a 500 | `importe:{$gt:500}` |
+| Más recientes primero | `sort({fecha:-1})` |
+| Solo diez | `limit(10)` |
+
+Para no confundir la consulta con el comando de Docker, la ejecutaremos como archivo en el paso siguiente. Antes, intenta leer mentalmente esta expresión:
+
+```javascript
+db.ventas
+  .find({estado:"pagada",importe:{$gt:500}})
+  .sort({fecha:-1})
+  .limit(10)
+```
+
+Si dices «busca todas las ventas y luego imprime las que quiera», todavía falta precisión: la consulta filtra por **dos condiciones** y ordena antes de limitar.
+
+## PASO 4 — Contar cuántas ventas cumplen las condiciones
+
+Ejecuta en tu terminal:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({estado:"pagada",importe:{$gt:500}}))'
+```
+
+La cifra representa todas las ventas pagadas que superan el umbral. **No tienen por qué ser solo diez**: el límite de diez se aplica después, cuando pidamos una lista de las más recientes.
+
+Escribe el número obtenido: __________.
+
+¿Por qué hacemos esta comprobación? Si apenas hubiera tres documentos que cumplen la condición, elegir un índice para ordenar millones de candidatos sería una preocupación muy distinta a la de una colección con miles de coincidencias.
+
+## PASO 5 — Reconocer el índice que ya existe
+
+El archivo `lab/03_crear_indices.js` crea, entre otros, este índice:
+
+```javascript
+{estado:1,fecha:-1,importe:1}
+```
+
+Su nombre en nuestro proyecto es `ix_esr`. Comprueba su existencia:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(x=>x.name==="ix_esr"))'
+```
+
+Deberías ver una definición que contiene `estado`, `fecha` e `importe`, en ese orden. Si la salida es `[]`, el índice no existe. Vuelve a los pasos de la práctica anterior: probablemente no ejecutaste `03_crear_indices.js` o recargaste después las ventas.
+
+## PASO 6 — Comparar orden ESR y ERS
+
+Vamos a utilizar un script nuevo:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_guiado.js
+```
+
+**Antes de ejecutarlo**, comprende qué hará:
+
+1. Verificará que existe la colección y el índice `ix_esr`.
+2. Creará el índice alternativo `ix_ers_practica` con `{estado:1,importe:1,fecha:-1}`.
+3. Ejecutará **la misma consulta** dos veces, una obligando a usar cada índice mediante `hint`.
+4. Comprobará que ambas variantes devuelven los mismos números de venta y en el mismo orden.
+5. Imprimirá un resumen de `executionStats` para poder comparar el trabajo efectuado.
+
+El script no borra las ventas. Añade un índice de laboratorio, que puedes consultar o eliminar más tarde.
+
+### Cómo leer el resultado
+
+Busca dos bloques etiquetados `ESR` y `ERS`. En cada uno anota:
+
+| Dato | ESR | ERS |
+|---|---:|---:|
+| `nReturned` | ____ | ____ |
+| `totalDocsExamined` | ____ | ____ |
+| `totalKeysExamined` | ____ | ____ |
+| ¿Aparece una etapa `SORT`? | ____ | ____ |
+| `executionTimeMillis` | ____ | ____ |
+
+**Importante:** no te he dado números fijos de tiempo; no sería riguroso prometerlos. Los valores obtenidos son los de tu ejecución, no una puntuación a aprobar.
+
+## PASO 7 — Entender la diferencia sin memorizar la sigla
+
+El índice ESR agrupa primero por `estado`, dentro de ese grupo organiza `fecha` en orden descendente y deja `importe` como tercera clave. Eso facilita recuperar documentos ya ordenados por fecha cuando conoces el estado, aunque el rango de importes no se pueda reducir tan eficazmente como cuando aparece antes.
+
+El índice ERS agrupa por `estado` y después por `importe`. Puede localizar un rango de importes más directamente, pero el orden global por `fecha` entre distintos importes puede requerir una ordenación adicional.
+
+**Pregunta clave:** ¿cuál ha examinado menos claves? ¿Cuál evita una operación de ordenación adicional? ¿Es el mismo índice el mejor en ambas métricas? Elige según los datos y el uso, no según un eslogan.
+
+## PASO 8 — Comprobar que ningún índice ha cambiado la respuesta
+
+El script confirma que los diez `numero` devueltos son iguales en ambas variantes.
+
+¿Por qué importa esa comprobación? Porque una optimización **no puede convertir la consulta en otra pregunta distinta**. El resultado debe seguir representando «diez ventas pagadas de más de 500 euros, ordenadas de más reciente a más antigua».
+
+Hay una sutileza: varias ventas pueden compartir exactamente la misma fecha. En ese caso, ordenar solo por fecha puede dejar empates sin un orden total definido. Nuestro experimento añade `numero` como segundo criterio de comparación **en el listado de verificación de identidad**, no como nueva exigencia a la consulta; el script comprueba el conjunto y el orden efectivo bajo los mismos datos. Si al ejecutar variantes de consulta distintas hay diferencias en los empates, no concluyas que MongoDB pierde datos: especifica un criterio secundario de ordenación para eliminar la ambigüedad y diseña el índice correspondiente.
+
+## PASO 9 — Errores habituales
+
+- **El script dice que falta `ix_esr`:** ejecuta la práctica anterior hasta el paso de creación de índices.
+- **Dice que no hay ventas:** completa la carga de datos; no crees índices sobre una colección vacía fingiendo un experimento de 200.000 registros.
+- **Aparece otra cantidad de resultados:** comprueba el estado y el filtro por importe, y que consultaste el servidor correcto.
+- **Hay una operación `SORT` en ERS:** no es un fallo del script; es precisamente una característica posible del plan.
+- **El tiempo cambia al repetirlo:** es normal; por eso usamos también los contadores de documentos y claves.
+- **Falló la creación del índice:** revisa el texto del error y el espacio disponible. No borres todos los índices ni la colección para solucionar un error que no comprendes.
+
+## PASO 10 — Retomar el control
+
+Al terminar, puedes examinar los dos índices:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(x=>["ix_esr","ix_ers_practica"].includes(x.name)))'
+```
+
+No borres `ix_esr` porque forma parte de los ejercicios siguientes. Si deseas eliminar exclusivamente el índice creado para la comparación:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'db.getSiblingDB("curso_indices").ventas.dropIndex("ix_ers_practica")'
+```
+
+Después puedes detener `mongo-indices` con `docker compose stop mongo-indices`. Si vas a continuar, déjalo funcionando.
+
+## Actividad de comprensión
+
+Explica, con un ejemplo de tus ventas, cómo responderías a alguien que afirma:
+
+> «Siempre hay que poner primero el campo más selectivo y dejar la fecha al final».
+
+Tu respuesta debe distinguir igualdad, rango, ordenación y el volumen de candidatos. No se acepta como justificación repetir simplemente «porque lo dice ESR».
+
+**Siguiente tema:** un índice multikey para un campo que contiene una lista de etiquetas, y por qué ese índice es distinto de uno sobre un valor escalar.
