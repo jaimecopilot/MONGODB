@@ -261,7 +261,7 @@ docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_g
 1. Verificará que existe la colección y el índice `ix_esr`.
 2. Creará el índice alternativo `ix_ers_practica` con `{estado:1,importe:1,fecha:-1}`.
 3. Ejecutará **la misma consulta** dos veces, una obligando a usar cada índice mediante `hint`.
-4. Comprobará que ambas variantes devuelven los mismos números de venta y en el mismo orden.
+4. Comprobará que ambas variantes devuelven diez ventas que cumplen los filtros y que las fechas están ordenadas de manera descendente. Si varias ventas comparten fecha, **los identificadores concretos pueden variar legítimamente**: la consulta no ha establecido cómo resolver los empates.
 5. Imprimirá un resumen de `executionStats` para poder comparar el trabajo efectuado.
 
 El script no borra las ventas. Añade un índice de laboratorio, que puedes consultar o eliminar más tarde.
@@ -290,11 +290,11 @@ El índice ERS agrupa por `estado` y después por `importe`. Puede localizar un 
 
 ## PASO 8 — Comprobar que ningún índice ha cambiado la respuesta
 
-El script confirma que los diez `numero` devueltos son iguales en ambas variantes.
+El script confirma que **ambas variantes obedecen la consulta**: diez ventas pagadas, con importe superior a 500, en orden descendente de fecha.
 
-¿Por qué importa esa comprobación? Porque una optimización **no puede convertir la consulta en otra pregunta distinta**. El resultado debe seguir representando «diez ventas pagadas de más de 500 euros, ordenadas de más reciente a más antigua».
+¿Por qué importa esa comprobación? Porque una optimización **no puede cambiar el significado de la consulta**. Debe seguir representando «diez ventas pagadas de más de 500 euros, ordenadas de más reciente a más antigua». Eso no garantiza que el límite seleccione los mismos identificadores entre ventas empatadas en fecha.
 
-Hay una sutileza: varias ventas pueden compartir exactamente la misma fecha. En ese caso, ordenar solo por fecha puede dejar empates sin un orden total definido. Nuestro experimento añade `numero` como segundo criterio de comparación **en el listado de verificación de identidad**, no como nueva exigencia a la consulta; el script comprueba el conjunto y el orden efectivo bajo los mismos datos. Si al ejecutar variantes de consulta distintas hay diferencias en los empates, no concluyas que MongoDB pierde datos: especifica un criterio secundario de ordenación para eliminar la ambigüedad y diseña el índice correspondiente.
+**Sutileza importante:** varias ventas pueden compartir exactamente la misma fecha. `sort({fecha:-1})` no especifica qué venta debe aparecer primero dentro de un empate. Si los dos planes eligen documentos diferentes con la misma fecha límite, eso no demuestra pérdida de datos ni un error de índice. Para un orden total estable podrías pedir `sort({fecha:-1,numero:1})`, pero entonces también tendrías que estudiar índices que incluyan ese segundo campo de ordenación. Lo haremos en una práctica posterior.
 
 ## PASO 9 — Errores habituales
 
