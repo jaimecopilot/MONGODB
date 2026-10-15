@@ -1851,3 +1851,208 @@ Una persona ajena a MongoDB debería entender **por qué el índice importa** si
 «La pantalla busca una venta concreta entre 200.000 registros. Sin un índice secundario por número, la consulta necesitó examinar una gran cantidad de documentos para devolver uno. Después se añadió un índice ascendente único sobre el número. Al repetir el mismo filtro, el plan utilizó el índice y los documentos examinados se redujeron drásticamente. Esta mejora se refiere al trabajo de la consulta medida; los tiempos son específicos del equipo y el índice introduce un coste de almacenamiento y mantenimiento».
 
 **Ese informe sí demuestra comprensión.** Una captura del mensaje `[OK]`, por sí sola, no.
+
+
+---
+
+# Laboratorio 15 — Búsquedas sin distinguir mayúsculas: collation e índices
+
+## Por qué «Ana» y «ana» no siempre deben ser personas distintas
+
+Una aplicación de inscripciones permite buscar alumnos por su nombre. Un usuario escribe «ana» y espera encontrar a «Ana». En otra aplicación, un código de producto `AB-10` debe tratarse como diferente de `ab-10` por una regla del negocio.
+
+Antes de indexar hay que decidir **qué significa considerar dos valores iguales**. Los índices no pueden tomar esa decisión por nosotros.
+
+MongoDB permite definir reglas de comparación lingüística mediante **collation**. Una collation puede influir en cómo se comparan y ordenan cadenas, incluido si distinguimos mayúsculas, acentos y otros aspectos según idioma y fuerza de comparación.
+
+Vamos a estudiar un caso sencillo con nombres ficticios.
+
+### Paso 1. Iniciar MongoDB y abrir mongosh
+
+Desde PowerShell o Bash:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Las instrucciones siguientes se ejecutan **dentro de `mongosh`**. No vamos a tocar `ventas`.
+
+### Paso 2. Crear una colección de nombres
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.nombres_clase.drop();
+d.nombres_clase.insertMany([
+  {_id:1,nombre:"Ana",ciudad:"Madrid"},
+  {_id:2,nombre:"Carlos",ciudad:"Sevilla"},
+  {_id:3,nombre:"Beatriz",ciudad:"Bilbao"}
+]);
+```
+
+El `drop` afecta únicamente a la colección de clase `nombres_clase`. Observa que el nombre del primer documento empieza por mayúscula.
+
+### Paso 3. Consultar por un valor exacto sin collation explícita
+
+```javascript
+d.nombres_clase.find({nombre:"ana"}).toArray()
+```
+
+Según las reglas de comparación por defecto de la colección, no debemos suponer que `"ana"` y `"Ana"` son iguales. En este escenario esperamos no encontrar el documento cuyo nombre fue almacenado con mayúscula.
+
+### Paso 4. Aplicar una comparación lingüística
+
+```javascript
+d.nombres_clase.find({nombre:"ana"})
+ .collation({locale:"es",strength:2})
+ .toArray()
+```
+
+La opción `locale:"es"` utiliza reglas lingüísticas de español; `strength:2` permite una comparación que no distingue mayúsculas de minúsculas en este caso, manteniendo otras distinciones lingüísticas propias de la configuración.
+
+**Resultado esperado:** ahora podemos encontrar el documento `Ana`. No se modificó lo almacenado: cambiamos la regla de comparación aplicada a la consulta.
+
+### Paso 5. Crear un índice con esa misma collation
+
+```javascript
+d.nombres_clase.createIndex(
+  {nombre:1},
+  {
+    name:"ix_nombre_es",
+    collation:{locale:"es",strength:2}
+  }
+)
+```
+
+El índice está construido de acuerdo con unas reglas lingüísticas concretas. Eso implica una idea importante: **no cualquier consulta podrá aprovecharlo del mismo modo si utiliza una collation diferente**.
+
+### Paso 6. Comprobar el uso del índice
+
+```javascript
+d.nombres_clase.find({nombre:"ana"})
+ .collation({locale:"es",strength:2})
+ .hint("ix_nombre_es")
+ .explain("executionStats")
+```
+
+Busca en la salida si se utiliza el índice y cuántas claves se examinan. La colección contiene solo tres documentos, por lo que no esperamos demostrar una gran mejora temporal. Esta actividad trata de **semántica de comparación** y de compatibilidad entre consulta e índice.
+
+### Paso 7. Una restricción unique con comparación lingüística
+
+Imagina que dos registros no deben distinguirse únicamente por mayúsculas. En una colección independiente:
+
+```javascript
+d.nombres_unicos_clase.drop();
+d.nombres_unicos_clase.createIndex(
+  {nombre:1},
+  {
+    name:"ix_nombre_unico_es",
+    unique:true,
+    collation:{locale:"es",strength:2}
+  }
+);
+d.nombres_unicos_clase.insertOne({nombre:"Ana"});
+```
+
+Ahora intenta insertar un segundo documento con `nombre:"ana"`. **Resultado esperado:** la operación debe rechazarse por duplicado según la collation del índice único.
+
+La prueba es valiosa porque enseña que una regla de comparación también puede afectar a la integridad.
+
+### Paso 8. Explicar sin engaños
+
+No afirmes que `strength:2` sirve para resolver cualquier necesidad lingüística de cualquier idioma. Las reglas de mayúsculas, acentos, caracteres equivalentes y ordenación deben estudiarse en el contexto real.
+
+Para este ejercicio basta con argumentar:
+- por qué la consulta inicial no encontraba la cadena con mayúscula;
+- qué cambió al declarar la collation;
+- por qué el índice debe estar alineado con las reglas de comparación;
+- por qué un índice unique puede rechazar valores que un usuario considera equivalentes.
+
+### Pregunta de diseño
+
+Una empresa utiliza identificadores de producto que distinguen mayúsculas, pero los nombres de sus clientes no. ¿Aplicarías necesariamente la misma collation a ambos campos? Justifica la respuesta a partir de las reglas del negocio, no de una preferencia estética.
+
+---
+
+# Laboratorio 16 — Una búsqueda de subcadenas no es un índice de texto
+
+## El problema
+
+En el Laboratorio 3 utilizaste `$text` para buscar términos dentro de descripciones. Ahora otro compañero pide un buscador que encuentre cualquier fragmento escrito en medio de una palabra. Afirma que «si la base tiene un índice de texto, todas las búsquedas por letras deberían ser rápidas».
+
+Esta afirmación es incorrecta: **buscar palabras mediante un índice de texto clásico** y **buscar una secuencia arbitraria de caracteres** son problemas con semánticas y costes diferentes.
+
+### Paso 1. Preparar tres descripciones
+
+Utiliza una colección ficticia, sin alterar `ventas`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.descripcion_clase.drop();
+d.descripcion_clase.insertMany([
+  {_id:1,descripcion:"cafe premium en grano"},
+  {_id:2,descripcion:"cafetera para oficina"},
+  {_id:3,descripcion:"bicicleta urbana plegable"}
+]);
+```
+
+Piensa qué debería encontrar un usuario si escribe `cafe`, `cafet` o `premium`. ¿Consideramos coincidencia de palabra, prefijo de palabra o subcadena arbitraria?
+
+### Paso 2. Buscar por igualdad completa
+
+```javascript
+d.descripcion_clase.find({descripcion:"cafe"}).toArray()
+```
+
+**Resultado esperado:** no encuentra el documento uno, porque su descripción completa no es exactamente `cafe`. El filtro de igualdad compara el valor completo.
+
+### Paso 3. Buscar una secuencia mediante regex
+
+```javascript
+d.descripcion_clase.find({
+  descripcion:{$regex:"cafe",$options:"i"}
+}).toArray()
+```
+
+Ahora pedimos una expresión regular que busque la secuencia `cafe`, ignorando el caso de las letras. En estos datos puede localizar tanto `cafe premium` como `cafetera`.
+
+Eso no significa que la consulta vaya a aprovechar automáticamente un índice `text`. Una expresión regular no equivale a la búsqueda textual por términos.
+
+### Paso 4. Crear el índice textual
+
+```javascript
+d.descripcion_clase.createIndex(
+  {descripcion:"text"},
+  {name:"ix_texto_clase",default_language:"spanish"}
+);
+```
+
+El índice habilita las consultas mediante `$text`. No convierte todas las expresiones regulares en búsquedas optimizadas.
+
+### Paso 5. Ejecutar una consulta textual
+
+```javascript
+d.descripcion_clase.find({
+  $text:{$search:"premium"}
+}).toArray()
+```
+
+**Resultado esperado:** el documento que contiene `cafe premium en grano`. La operación busca el término de acuerdo con el índice de texto disponible.
+
+### Paso 6. Comparar planes sin falsear la equivalencia
+
+Puedes llamar a `explain("executionStats")` sobre la consulta regex y sobre la consulta `$text`. Pero **no las presentes como un antes/después del mismo problema**: las reglas de coincidencia son diferentes y, por tanto, la cantidad de resultados también puede cambiar.
+
+El objetivo es comprender:
+- qué resultado pide cada filtro;
+- qué estructura permite resolverlo;
+- cuándo una técnica no sustituye a la otra;
+- por qué necesitamos elegir el buscador a partir de requisitos reales.
+
+### Paso 7. Precauciones frente a sistemas de búsqueda más avanzados
+
+Un buscador corporativo puede necesitar corrección ortográfica, relevancia compleja, tolerancia a errores, sinónimos y análisis de idiomas. Los índices `text` clásicos permiten ciertos escenarios de búsqueda textual, pero no deben presentarse como equivalentes a todas las funciones de motores especializados o de MongoDB Search.
+
+### Evaluación final
+
+Una persona pide «todas las descripciones que contienen los caracteres `bic` en cualquier posición». Otra pide «documentos relacionados con la palabra bicicleta». ¿Por qué no resolverías automáticamente ambas necesidades con idéntica consulta? Explica qué significa cada petición y cómo comprobarías los resultados.
