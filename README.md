@@ -20,7 +20,7 @@ Los Markdown son las fuentes editables y los PDF son la versión preparada para 
 - [`lab/`](lab/): scripts JavaScript para `mongosh`. Los archivos numerados siguen el recorrido de las prácticas.
 - [`compose.yaml`](compose.yaml): instancias de MongoDB para índices, autenticación y TLS.
 - [`scripts/`](scripts/): certificados de demostración y otras utilidades de instalación.
-- [GitHub Actions](../../actions/workflows/laboratorios.yml): pruebas automáticas de cinco recorridos (200.000 ventas, 1.000.000 ventas, itinerario de clase, scripts de prácticas y seguridad).
+- [GitHub Actions](https://github.com/jaimecopilot/MONGODB/actions/workflows/laboratorios.yml): pruebas automáticas de cinco recorridos (200.000 ventas, 1.000.000 ventas, itinerario de clase, scripts de prácticas y seguridad).
 
 ### Preparación local
 
