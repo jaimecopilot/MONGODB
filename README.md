@@ -49,3 +49,19 @@ Referencias oficiales:
 - [Autenticación](https://www.mongodb.com/docs/v8.0/core/authentication/)
 - [TLS](https://www.mongodb.com/docs/v8.0/tutorial/configure-ssl/)
 - [X.509](https://www.mongodb.com/docs/v8.0/tutorial/configure-x509-client-authentication/)
+
+
+## Material lectivo — PDF y Markdown
+
+Los **cuatro manuales docentes** y la guía del formador forman parte del repositorio. Los Markdown son el material editable; los PDF se generan y versionan mediante [Publicar manuales PDF](.github/workflows/publicar-manuales.yml), con control automático de páginas.
+
+| Capítulo | Teoría | Prácticas |
+|---|---|---|
+| 4 — Indexación | [PDF](INDEXACION/TEORIA/INDICES_TEORIA.pdf) · [MD](INDEXACION/TEORIA/INDICES_TEORIA.md) | [PDF](INDEXACION/PRACTICAS/INDICES_PRACTICAS.pdf) · [MD](INDEXACION/PRACTICAS/INDICES_PRACTICAS.md) |
+| 6 — Seguridad | [PDF](SEGURIDAD/TEORIA/SEGURIDAD_TEORIA.pdf) · [MD](SEGURIDAD/TEORIA/SEGURIDAD_TEORIA.md) | [PDF](SEGURIDAD/PRACTICAS/SEGURIDAD_PRACTICAS.pdf) · [MD](SEGURIDAD/PRACTICAS/SEGURIDAD_PRACTICAS.md) |
+
+- [Guía del formador en PDF](DOCENCIA/GUIA_DEL_FORMADOR.pdf) · [Markdown](DOCENCIA/GUIA_DEL_FORMADOR.md).
+- [Auditoría y trazabilidad en PDF](DOCENCIA/INFORME_AUDITORIA_Y_TRAZABILIDAD.pdf) · [Markdown](DOCENCIA/INFORME_AUDITORIA_Y_TRAZABILIDAD.md).
+- [Trazabilidad ejecutable de los laboratorios](docs/TRAZABILIDAD_MANUALES.md).
+
+Para regenerar los PDF: ejecutar `python scripts/generar_manuales_pdf.py` después de instalar las dependencias del workflow. Los PDF del repositorio son compilaciones reproducibles a partir del Markdown revisado. La maquetación puede variar respecto a entregas previas fuera de GitHub.
