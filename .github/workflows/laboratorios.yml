@@ -124,8 +124,10 @@ jobs:
         run: |
           docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
           docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
-      - name: Verificar la segunda practica guiada
+      - name: Verificar indices compuestos ESR y ERS
         run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_guiado.js
+      - name: Verificar indice unico parcial y cambios de estado
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/17_partial_unique_guiado.js
       - name: Diagnosticar errores
         if: failure()
         run: docker compose logs --tail=120 mongo-indices
