@@ -810,6 +810,318 @@ O eliminar todos los contenedores del proyecto (y, si añades `--volumes`, tambi
 
 ---
 
+## 13. Seleccionar columnas no es lo mismo que filtrar documentos
+
+En esta actividad no vas a crear ningún índice. Vas a aprender a distinguir dos conceptos que suelen confundirse: **el filtro** decide qué documentos cumplen la condición; **la proyección** decide qué campos se muestran de esos documentos.
+
+Dentro de `mongosh`, selecciona la base:
+
+```javascript
+use curso_indices
+db.ventas.find(
+  {clienteId: 809},
+  {_id: 0, numero: 1, importe: 1}
+).limit(5)
+```
+
+**Cómo leerlo:** el primer objeto entre llaves es el filtro por cliente. El segundo dice «incluye el número y el importe, pero no muestres `_id`». No cambia qué ventas pertenecen al cliente: cambia los campos devueltos.
+
+Repite sin proyección:
+
+```javascript
+db.ventas.find({clienteId: 809}).limit(5)
+```
+
+**Qué observar:** en la segunda salida aparecen más campos. Es posible que el número de documentos devueltos siga siendo el mismo. Eso no significa que la consulta haya trabajado igual internamente.
+
+**Comprobación:** ejecuta `.explain("executionStats")` para ambas consultas y compara `nReturned` y `totalDocsExamined`. ¿Son iguales? En determinadas condiciones pueden serlo, porque solo hemos modificado la forma de los resultados.
+
+**Si no ves registros:** verifica que el campo se llama `clienteId`, que su valor es numérico y que la colección tiene datos cargados. Si `db.ventas.countDocuments({})` devuelve cero, vuelve al laboratorio de carga.
+
+**Lo que debes explicar:** una proyección puede reducir datos enviados al cliente y participar en una consulta cubierta, pero una proyección por sí sola no crea un índice.
+
+---
+
+## 14. Consulta cubierta: demostrar que se leen claves y no documentos
+
+Esta práctica responde a una pregunta más fina que «¿usó un índice?». Queremos saber si el servidor puede obtener una respuesta únicamente desde las entradas del índice.
+
+### Preparar un índice que contiene el filtro y la proyección
+
+Dentro de `mongosh`:
+
+```javascript
+db.ventas.createIndex(
+  {clienteId: 1, importe: 1},
+  {name: "ix_cobertura_cliente_importe"}
+)
+```
+
+Ahora ejecuta:
+
+```javascript
+db.ventas.find(
+  {clienteId: 809},
+  {_id: 0, clienteId: 1, importe: 1}
+).hint("ix_cobertura_cliente_importe")
+ .limit(5)
+ .explain("executionStats")
+```
+
+Busca `totalDocsExamined`. En este patrón esperamos que pueda valer **0**: la respuesta está disponible en las claves del índice. El servidor podrá examinar varias claves y devolver cinco documentos lógicos sin tener que leer el documento completo.
+
+**¿Por qué escribimos `_id: 0`?** Porque MongoDB incluiría normalmente `_id` en la salida y ese campo no forma parte del índice que estamos utilizando. Con `_id: 0` declaramos expresamente que no lo necesitamos para esta consulta.
+
+### Romper la cobertura con un cambio intencionado
+
+Prueba una proyección que también pida la descripción:
+
+```javascript
+db.ventas.find(
+  {clienteId: 809},
+  {_id: 0, clienteId: 1, importe: 1, descripcion: 1}
+).hint("ix_cobertura_cliente_importe")
+ .limit(5)
+ .explain("executionStats")
+```
+
+El índice no incluye `descripcion`. Para devolver ese campo, MongoDB necesita normalmente acceder a documentos de la colección. Observa cómo cambia `totalDocsExamined`.
+
+**Conclusión:** un índice cubre una consulta concreta, no una colección completa. No es razonable agregar todos los campos del documento a cada índice solo para intentar obtener cobertura.
+
+---
+
+## 15. Rango numérico: por qué una condición cambia los candidatos
+
+Piensa en la pantalla de administración que muestra ventas de 100 a 200 euros. No conocemos su número exacto; necesitamos encontrar un conjunto dentro de un intervalo.
+
+### Escribe primero la pregunta
+
+```javascript
+db.ventas.find({
+  importe: {$gte: 100, $lt: 200}
+}).limit(5)
+```
+
+`$gte` significa «mayor o igual que» y `$lt` «menor que». Por tanto, incluye 100 y excluye 200. Ese detalle es importante en facturas, precios y fechas.
+
+### Construye un índice orientado al intervalo
+
+```javascript
+db.ventas.createIndex({importe: 1}, {name: "ix_importe_rango"})
+```
+
+Después:
+
+```javascript
+db.ventas.find({
+  importe: {$gte: 100, $lt: 200}
+}).hint("ix_importe_rango")
+  .limit(5)
+  .explain("executionStats")
+```
+
+**Qué mirar:** si hay muchas ventas en ese rango, MongoDB puede examinar numerosas entradas de índice. El índice permite recorrer claves del intervalo, pero no garantiza encontrar «una sola venta» porque la pregunta devuelve potencialmente muchas.
+
+### Comparación de interpretación
+
+Cambia el límite de 5 a 50. La selección lógica por importe no cambia, pero el número de resultados que solicitas aumenta. ¿Se examinan más entradas? Compruébalo en `explain()` sin asumir una cifra concreta.
+
+**Si todo devuelve cero:** inspecciona `db.ventas.findOne()` y comprueba que `importe` es un número. No escribas `"100"` entre comillas si quieres comparar números.
+
+---
+
+## 16. Campo poco selectivo: aprender cuándo un índice ayuda menos
+
+El campo `estado` tiene pocos valores posibles, como `"pagada"` y `"pendiente"`. Una gran cantidad de ventas puede compartir el mismo estado.
+
+### Experimenta con la distribución
+
+```javascript
+use curso_indices
+db.ventas.countDocuments({estado: "pagada"})
+db.ventas.countDocuments({})
+```
+
+Divide el primer resultado por el segundo. Si una de cada cuatro ventas aparece como pagada, el filtro devuelve una fracción apreciable de la colección. No es como buscar un número de venta único.
+
+### Crear un índice de igualdad
+
+```javascript
+db.ventas.createIndex({estado: 1}, {name: "ix_estado_solo"})
+```
+
+Mide la consulta:
+
+```javascript
+db.ventas.find({estado: "pagada"})
+  .hint("ix_estado_solo")
+  .explain("executionStats")
+```
+
+Puede devolver miles de documentos y examinar muchas claves. A diferencia de la consulta por `numero`, aquí no deberías esperar `totalDocsExamined: 1`.
+
+### ¿Por qué usamos hint?
+
+Para estudiar el índice concreto. Después repite la misma consulta **sin `hint`** y observa qué plan decide MongoDB. El planificador no está obligado a elegir nuestro índice si otro plan le resulta mejor.
+
+**La enseñanza:** no basta con afirmar «el campo tiene índice». También importa cuántos documentos satisfacen el filtro y cuál es el volumen de datos solicitado.
+
+---
+
+## 17. Igualdad más rango en un índice compuesto
+
+El gerente pide ventas de la tienda de Madrid por encima de cierto importe. Vamos a pasar de un solo campo a un diseño combinado.
+
+### Formular la consulta
+
+```javascript
+db.ventas.find({
+  tienda: "Madrid",
+  importe: {$gte: 300}
+}).limit(5)
+```
+
+Identifica qué parte es igualdad y cuál es rango. La primera restringe la tienda; la segunda selecciona un intervalo monetario.
+
+### Proponer un índice
+
+```javascript
+db.ventas.createIndex(
+  {tienda: 1, importe: 1},
+  {name: "ix_tienda_importe"}
+)
+```
+
+Ejecuta la consulta con `.explain("executionStats")` y después añade `.hint("ix_tienda_importe")` antes de `.explain`. Compara plan y contadores.
+
+### Por qué no invertiríamos el orden sin analizarlo
+
+La clave `{tienda:1,importe:1}` agrupa primero los valores de una tienda y permite recorrer después los importes correspondientes. Invertir el orden cambia la organización de las entradas. A veces una estructura alternativa puede convenir, pero hay que razonar qué filtros dominan la carga de trabajo.
+
+**Prueba de transferencia:** elimina la condición de tienda y conserva solo el filtro por importe. El prefijo izquierdo de la clave compuesta ya no se satisface. ¿Deberíamos garantizar el mismo acceso selectivo? No. Compruébalo en el plan.
+
+---
+
+## 18. Array de objetos y $elemMatch: no unir valores de elementos distintos
+
+Hasta ahora hemos buscado en un array de textos. Algunas ventas tienen otro tipo de lista:
+
+```javascript
+productos: [
+  {sku: "SKU45", cantidad: 2}
+]
+```
+
+Cada elemento es un objeto con varios campos. Cuando queremos que **la misma línea de producto** cumpla varios criterios, conviene conocer `$elemMatch`.
+
+### Ejemplo de consulta
+
+```javascript
+db.ventas.find({
+  productos: {
+    $elemMatch: {
+      sku: "SKU45",
+      cantidad: {$gte: 2}
+    }
+  }
+}).limit(5)
+```
+
+El operador expresa «existe un elemento del array que cumple ambas condiciones». Sin `$elemMatch`, distintas condiciones de un array pueden satisfacerse sobre elementos distintos según la forma de consulta; esa semántica podría dar un resultado no esperado.
+
+### Comprobar antes de indexar
+
+Ejecuta `db.ventas.findOne({productos: {$exists: true}})` y confirma que el campo realmente es una lista de objetos. Después ejecuta la consulta y observa los elementos.
+
+Puedes experimentar con un índice:
+
+```javascript
+db.ventas.createIndex(
+  {"productos.sku": 1, "productos.cantidad": 1},
+  {name: "ix_productos_sku_cantidad"}
+)
+```
+
+Este diseño indexa rutas dentro de los objetos del array. Debe estudiarse con las restricciones de multikey y con `explain()`; no se debe concluir que indexar cualquier par de arrays distintos está permitido.
+
+### Si no aparecen resultados
+
+La condición `sku` puede existir, pero `cantidad` ser insuficiente; reduce temporalmente la cantidad mínima y examina el dato, no cambies el operador sin entenderlo.
+
+---
+
+## 19. Búsqueda de texto con puntuación: no confundir relevancia con fecha
+
+Una búsqueda textual puede devolver muchas descripciones. MongoDB dispone de una puntuación de texto que ayuda a ordenar resultados según el mecanismo de búsqueda clásico.
+
+### La consulta
+
+Asegúrate de que existe el índice `text` en `descripcion`. Después, dentro de `mongosh`:
+
+```javascript
+db.ventas.find(
+  {$text: {$search: "reclamacion urgente"}},
+  {descripcion: 1, puntuacion: {$meta: "textScore"}}
+).sort({puntuacion: {$meta: "textScore"}}).limit(5)
+```
+
+La salida puede mostrar una puntuación numérica. **No es un porcentaje de acierto** ni una estimación de la gravedad de una reclamación; solo refleja el mecanismo de ranking textual.
+
+### Distinguir dos preguntas
+
+- «¿Qué documentos contienen palabras relacionadas con reclamación urgente?». Es una pregunta de texto.
+- «¿Cuáles de esos documentos son los más recientes?». Añade una exigencia cronológica que no es equivalente a ordenar por relevancia.
+
+Si la aplicación necesita ambas propiedades, tiene que decidir cómo combinarlas. No supongas que una puntuación de texto reemplaza a un campo `fecha`.
+
+### Si aparece un error de índice de texto
+
+Usa `db.ventas.getIndexes()` para verificar que el índice existe. Una colección autogestionada admite, con el mecanismo clásico, un índice `text` por colección aunque pueda cubrir varios campos.
+
+---
+
+## 20. Comprender qué devuelve una consulta geoespacial
+
+Una localización no es un nombre de ciudad. Para consultar por proximidad, MongoDB necesita puntos con coordenadas coherentes.
+
+### Inspeccionar primero un documento
+
+```javascript
+use curso_indices
+db.ventas.findOne({ubicacion: {$exists: true}})
+```
+
+Localiza `ubicacion.type` y `ubicacion.coordinates`. Si ves `"Point"` con dos números, recuerda su orden: **longitud, latitud**.
+
+### Ejecutar proximidad sobre el mismo formato
+
+```javascript
+db.ventas.find({
+  ubicacion: {
+    $near: {
+      $geometry: {type: "Point", coordinates: [-3.7038, 40.4168]},
+      $maxDistance: 5000
+    }
+  }
+}).limit(5)
+```
+
+Si el índice `2dsphere` todavía no existe, créalo mediante el ejercicio anterior. Observa si devuelve documentos dentro de la distancia solicitada.
+
+### Dos errores habituales
+
+**Coordenadas invertidas.** Escribir primero latitud y luego longitud cambia el punto, aunque ambos números parezcan «geográficos».
+
+**Unidades confundidas.** El ejemplo utiliza metros para `$maxDistance` con GeoJSON y `2dsphere`. No interpretes 5000 como kilómetros.
+
+### Qué no demuestra la prueba
+
+Que existan cinco resultados no implica que todas las ventas se produzcan a menos de 5 km de ese punto. Hemos pedido solo un máximo de cinco resultados; para contar resultados de una región sería necesaria otra consulta apropiada.
+
+
+---
+
 ## Resolución de incidencias frecuentes
 
 **«docker: command not found».** No estás ejecutando Docker desde una terminal que tenga disponible el programa; revisa instalación y ruta.
