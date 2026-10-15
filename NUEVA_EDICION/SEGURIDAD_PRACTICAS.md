@@ -1224,6 +1224,316 @@ Elabora una tabla de **identidad, recurso, operación permitida, operación proh
 
 ---
 
+## 28. Verificar un permiso antes y después de reconectar
+
+Las cuentas de MongoDB se mantienen aunque cierres una sesión de `mongosh`. Pero las modificaciones de privilegios deben comprobarse en el contexto de la identidad afectada.
+
+### Primera comprobación
+
+Abre una conexión como `lectorlab`:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase curso_seguridad --password
+```
+
+Dentro del intérprete:
+
+```javascript
+use curso_seguridad
+db.secretos.findOne({_id: "demo-1"})
+```
+
+La lectura debe estar permitida.
+
+### Segunda comprobación
+
+Sal con `exit` y vuelve a conectar como lector. Repite la misma consulta. El resultado debe seguir siendo válido siempre que los roles no hayan cambiado.
+
+### ¿Qué hemos demostrado?
+
+La sesión de terminal y la identidad almacenada en MongoDB no son la misma cosa. Cerrar `mongosh` no borra el usuario; reiniciar un cliente tampoco restablece mágicamente permisos eliminados.
+
+### Pregunta de transferencia
+
+Si el lector acaba de recibir un cambio de rol, ¿bastaría mirar una vieja captura de la sesión anterior? No. Debes observar los permisos reales del contexto actual, y cuando corresponda establecer una nueva sesión.
+
+---
+
+## 29. Ver los usuarios sin mostrar sus contraseñas
+
+El responsable de seguridad necesita saber qué cuentas están creadas, pero eso no significa que deba imprimir contraseñas en un informe.
+
+### Conectar como administrador
+
+```bash
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_seguridad
+db.getUsers()
+```
+
+La operación muestra usuarios y sus roles, pero no debe interpretarse como una forma de recuperar contraseñas originales para volver a utilizarlas.
+
+### Identificar roles
+
+Busca `lectorlab` con `read` y `escritorlab` con `readWrite`. Si los roles no coinciden, repasa si hiciste ejercicios de revocación y si devolviste el estado previsto.
+
+### Una comprobación más precisa
+
+```javascript
+db.getUser("lectorlab")
+```
+
+Observa la definición de la cuenta, sin publicar los resultados si contienen información administrativa relevante.
+
+### Conclusión
+
+La administración de identidades consiste en verificar quién tiene permiso para qué. No implica conocer o compartir la contraseña de cada usuario.
+
+---
+
+## 30. Cambiar una contraseña sin escribirla en un documento público
+
+Esta práctica utiliza una cuenta **opcional** de laboratorio creada en el ejercicio del rol personalizado, `consultorlab`. No cambies la contraseña de `adminlab`, `lectorlab` o `escritorlab`, porque afectaría a los otros laboratorios automatizados.
+
+### Paso 1. Confirmar que el usuario existe
+
+Conéctate como administrador y ejecuta:
+
+```javascript
+use curso_seguridad
+db.getUser("consultorlab")
+```
+
+Si devuelve `null`, prepara primero esa cuenta siguiendo el laboratorio 17. No continúes con una cuenta inexistente.
+
+### Paso 2. Cambiar su contraseña
+
+```javascript
+db.changeUserPassword("consultorlab", passwordPrompt())
+```
+
+`passwordPrompt()` permite introducir el nuevo secreto de forma interactiva sin escribirlo como texto fijo en el comando.
+
+### Paso 3. Comprobar el cambio
+
+Sal del administrador. Intenta conectar como `consultorlab` con la **contraseña anterior**. Debe rechazarse. Vuelve a intentarlo con la nueva; debería funcionar si el cambio se aplicó correctamente.
+
+### Qué has aprendido
+
+Rotar una contraseña exige reemplazar el secreto válido y comprobar que el anterior ya no proporciona acceso. El control de acceso basado en roles permanece: cambiar la contraseña no convierte al consultor en administrador.
+
+---
+
+## 31. Una cuenta que ya no se utiliza: retirada controlada
+
+El empleado temporal que utilizaba `consultorlab` ha terminado su trabajo. El laboratorio permite eliminar esta cuenta de demostración, pero debemos hacerlo sin afectar al resto.
+
+### Confirmar el ámbito
+
+```javascript
+use curso_seguridad
+db.getUser("consultorlab")
+```
+
+Ejecuta desde una sesión administrativa.
+
+### Retirar únicamente esa identidad
+
+```javascript
+db.dropUser("consultorlab")
+```
+
+El comando debe devolver una indicación de que se eliminó esa cuenta, si estaba presente.
+
+### Comprobar el resultado
+
+```javascript
+db.getUser("consultorlab")
+```
+
+Ahora debería devolver `null`.
+
+### Qué NO debes hacer
+
+No elimines `adminlab` ni las cuentas básicas del itinerario. La práctica se refiere únicamente al consultor opcional, creado de forma desechable.
+
+### Pregunta importante
+
+¿Eliminar el usuario significa que desaparecen todos los documentos que alguna vez consultó? No. El control de identidad y los datos son cosas distintas; retirar una cuenta revoca su acceso, no reescribe automáticamente los documentos del negocio.
+
+---
+
+## 32. Comprobar que .env no se ha publicado por accidente
+
+El archivo `.env` almacena valores de laboratorio que no deberían difundirse. Vamos a revisar cómo está tratado por Git, sin imprimir sus contraseñas.
+
+### Paso 1. Situarse en la raíz del repositorio
+
+En PowerShell o Bash, abre una terminal donde aparezcan `compose.yaml` y `.gitignore`.
+
+### Paso 2. Inspeccionar las reglas de exclusión
+
+```bash
+git check-ignore .env
+```
+
+Si el archivo existe y la regla está activa, normalmente verás `.env`. Es un buen indicio de que Git está configurado para excluirlo.
+
+### Paso 3. Distinguir plantilla de secreto
+
+`.env.example` se puede publicar porque contiene nombres de variables y valores de demostración que deben reemplazarse. `.env` contiene los valores utilizados realmente en tu equipo. No incluyas en ninguna captura de pantalla el contenido de este último.
+
+### Qué no garantiza gitignore
+
+Si un secreto ya se añadió a Git anteriormente, excluirlo después no lo borra del historial ni invalida la credencial. Esa información debe tratarse como comprometida y sustituirse.
+
+### Conclusión
+
+La seguridad también depende de cómo se gestiona el proyecto de software. No sirve configurar perfectamente MongoDB y después publicar por error todas sus contraseñas.
+
+---
+
+## 33. Un puerto local no demuestra que todos los usuarios estén protegidos
+
+La instancia de índices escucha sin autenticación porque el curso necesita un ejemplo muy simple con ventas falsas. La de seguridad exige credenciales. ¿Qué diferencia importa en la práctica?
+
+### Mirar los servicios
+
+```bash
+docker compose ps
+```
+
+Identifica `mongo-indices` y `mongo-seguridad`. El primero publica `127.0.0.1:27017` y el segundo `127.0.0.1:27018`.
+
+### Primera conexión
+
+```bash
+docker compose exec mongo-indices mongosh
+```
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_indices
+db.ventas.findOne()
+```
+
+Esta colección es intencionadamente accesible sin cuenta. No alberga información real.
+
+### Segunda conexión
+
+Cierra esa sesión y conecta sin usuario al servicio `mongo-seguridad`. Intenta consultar `curso_seguridad.secretos`. Debes encontrar una denegación.
+
+### Conclusión
+
+Que ambos contenedores publiquen puertos locales no significa que su política de autenticación sea igual. **La dirección de red decide alcance; la autenticación y autorización deciden identidad y operaciones.**
+
+### Precaución profesional
+
+No lleves la configuración sin autenticación del servicio de índices a una base real, aunque su puerto esté restringido a loopback.
+
+---
+
+## 34. Cadena de confianza: qué papel tiene cada archivo
+
+Hemos generado archivos `ca.crt`, `server.crt`, `client.crt` y sus PEM correspondientes. Para una persona que empieza, muchos nombres pueden parecer intercambiables. No lo son.
+
+### Identificar los roles
+
+- La **CA** firma y permite validar certificados emitidos bajo su autoridad de demostración.
+- El **certificado de servidor** representa la identidad y clave pública asociadas al servicio.
+- El **certificado de cliente** puede representar al alumno que se autenticará con X.509.
+- Las **claves privadas** deben custodiarse; nunca deben compartirse como si fueran certificados públicos.
+
+### Inspeccionar, sin imprimir claves privadas
+
+```bash
+openssl x509 -in certs/server.crt -noout -subject -issuer
+openssl x509 -in certs/client.crt -noout -subject -issuer
+```
+
+El sujeto del servidor y del cliente debe ser diferente. El emisor puede ser la misma CA docente.
+
+### Comparar dos operaciones
+
+```bash
+openssl verify -CAfile certs/ca.crt certs/server.crt
+openssl verify -CAfile certs/ca.crt certs/client.crt
+```
+
+Estas órdenes comprueban firmas y cadena de confianza en este laboratorio. **No asignan permisos de MongoDB**. El rol de la cuenta X.509 se gestiona después en el servidor.
+
+### Ejercicio de razonamiento
+
+Si un alumno dispone de un certificado válido pero el servidor no conoce su identidad ni sus permisos, ¿deberíamos concederle acceso total? No. Identidad y autorización son procesos distintos.
+
+---
+
+## 35. Identificar la diferencia entre fallo de red y fallo de permisos
+
+Dos alumnos dicen «no puedo conectarme a MongoDB», pero uno tiene Docker apagado y el otro intenta escribir como lector. Sus problemas no tienen el mismo origen.
+
+### Caso A. El contenedor no está levantado
+
+```bash
+docker compose ps
+```
+
+Si `mongo-seguridad` está detenido, la solución empieza por revisar el servicio y sus logs. Cambiar una contraseña no levanta un contenedor.
+
+### Caso B. La contraseña es errónea
+
+Si el servicio está sano, intenta la conexión con credenciales correctas. Un fallo de `Authentication failed` requiere revisar nombre, secreto y base de autenticación.
+
+### Caso C. La lectura funciona, la inserción no
+
+Si `lectorlab` puede leer pero su `insertOne` se rechaza, la conexión y la autenticación **sí funcionaron**. Lo que falla —correctamente— es la autorización para escribir.
+
+### Caso D. El servidor exige TLS
+
+Si el servicio `mongo-tls` rechaza una conexión sin TLS, no tiene sentido ampliar permisos del lector; primero debe cumplirse la política del canal.
+
+### Cómo redactar un informe útil
+
+En lugar de «MongoDB falló», escribe: «El servicio responde; la cuenta lectora se autentica; la operación de inserción se deniega por su rol de solo lectura». Ese diagnóstico permite actuar sin desmontar protecciones innecesariamente.
+
+---
+
+## 36. Una evaluación profesional sin tocar producción
+
+Imagina que asesoras a una pequeña librería. Dispone de una base de datos de pedidos, un servicio web, un equipo de atención y un administrador.
+
+### Diseñar una política
+
+Completa la matriz:
+
+| Identidad | Recurso | Operación permitida | Operación denegada |
+|---|---|---|---|
+| Atención | Pedidos de consulta | Lectura | Inserción/borrado |
+| Servicio web | Pedidos necesarios | Lectura/escritura controladas | Administración de usuarios |
+| Administración | Configuración | Gestión autorizada | Uso ordinario innecesario |
+
+### Convertir la política en pruebas
+
+No basta dibujar la tabla. Para cada cuenta formula una operación que **debería funcionar** y otra que **debería ser rechazada**. En un banco de pruebas recrearías esos usuarios con roles apropiados y comprobarías ambos resultados.
+
+### Añadir la red y el cifrado
+
+Determina qué clientes necesitan llegar a la base y por qué no conviene publicar puertos indiscriminadamente. Si la comunicación atraviesa redes que requieren protección, estudia TLS. Si se requiere protección ante una copia robada de almacenamiento, estudia medidas de cifrado en reposo y gestión de claves.
+
+### Respuesta final
+
+Presenta un informe breve en lenguaje natural. Debe explicar qué amenaza resuelve cada barrera y cuáles son sus límites. Si afirmas que X.509 o TLS «solucionan todos los permisos», tu diseño todavía no distingue identidad, canal y autorización.
+
+La competencia buscada no es ejecutar todos los comandos posibles, sino **configurar y justificar un conjunto de controles que permita lo necesario y rechace lo indebido**.
+
+---
+
 ## Guía de resolución de errores
 
 **«docker: command not found».** Docker no está instalado o la terminal no lo encuentra.
