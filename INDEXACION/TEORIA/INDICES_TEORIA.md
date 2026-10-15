@@ -1,7 +1,5 @@
 # MongoDB 8.0 · INDICES TEORIA
 
-Edición contrastada con los scripts de GitHub Actions. Las cifras de explain() son medidas de una ejecución concreta, no compromisos de rendimiento. Las actividades no cubiertas por el CI se identifican como ampliación hasta tener pruebas individuales.
-
 
 <!-- Hoja didáctica 1, ficha imprimible -->
 ## Indexación
@@ -11,7 +9,7 @@ De B-tree y explain a índices compuestos, multikey, texto, geoespaciales, hashe
 
 
 
-**Base técnica de referencia:** [repositorio MongoDB](https://github.com/jaimecopilot/MONGODB) y [evidencias de ejecución](https://github.com/jaimecopilot/MONGODB/blob/main/INFORME_EJECUCION.md). Los códigos se estudian en `mongosh`, con una base preparada y, si necesitan usuarios/índices previos, después del paso correspondiente. Las variantes de diseño que no están incluidas en GitHub Actions se consideran ejercicios de análisis o ampliación, no resultados ejecutados.
+**Ejemplos del curso:** los comandos se explican para una base de datos de laboratorio preparada con MongoDB Community 8.0. Consulta las prácticas del capítulo para ejecutar el código y comprobar los resultados. Antes de interpretar un ejemplo, revisa qué datos, índices o usuarios requiere.
 
 ---
 
@@ -50,7 +48,7 @@ Explain: https://www.mongodb.com/docs/manual/reference/explain-results/
 
 TTL: https://www.mongodb.com/docs/manual/core/index-ttl/
 
-> La presentación suministrada enfatiza prefijos compuestos, ESR, tamaño de índices, mantenimiento, consultas cubiertas y explain. Estos apartados se conservan y se conectan con laboratorios verificables.
+> Los prefijos compuestos, ESR, el tamaño y mantenimiento de índices, las consultas cubiertas y `explain()` se estudian mediante ejemplos progresivos en la teoría y las prácticas.
 
 
 ---

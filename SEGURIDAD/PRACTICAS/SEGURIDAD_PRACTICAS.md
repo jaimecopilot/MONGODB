@@ -1,7 +1,5 @@
 # MongoDB 8.0 · SEGURIDAD PRACTICAS
 
-Edición contrastada con los scripts de GitHub Actions. Las cifras de explain() son medidas de una ejecución concreta, no compromisos de rendimiento. Las actividades no cubiertas por el CI se identifican como ampliación hasta tener pruebas individuales.
-
 
 <!-- Hoja didáctica 1, ficha imprimible -->
 ## Seguridad
@@ -11,7 +9,7 @@ Fichas con órdenes, pruebas negativas, explicaciones causales y espacio para re
 
 
 
-**Entorno canónico:** el [repositorio GitHub](https://github.com/jaimecopilot/MONGODB) utiliza `compose.yaml` en la raíz y los archivos de `lab/`. **Solo se consideran automáticamente verificados los casos que ejecuta `.github/workflows/laboratorios.yml`.** No todos los experimentos opcionales de estas fichas están automatizados.
+**Entorno del curso:** el [repositorio MongoDB](https://github.com/jaimecopilot/MONGODB) contiene `compose.yaml` y los scripts de `lab/`. Ejecuta los pasos en el orden indicado, prepara los datos necesarios y contrasta lo que observas con el resultado explicado.
 
 ---
 
@@ -30,7 +28,8 @@ Fichas con órdenes, pruebas negativas, explicaciones causales y espacio para re
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d
+# Edita .env antes de iniciar los servicios.
+docker compose up -d --wait mongo-indices mongo-seguridad
 docker compose ps
 # después ejecutar /lab/08_configurar_seguridad.js con root
 ```
@@ -58,8 +57,6 @@ Indexación: carga, línea base, índice simple, comparación, compuesto ESR, te
 <!-- Hoja didáctica 3, ficha imprimible -->
 ## Laboratorio 01 · Inventario de infraestructura
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -141,8 +138,6 @@ La corrección del ejercicio exige acreditar comprobar dos instancias y los puer
 ## Laboratorio 02 · Primer arranque con credenciales
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Comprobar creación de contenedores y volúmenes.
@@ -222,8 +217,6 @@ La corrección del ejercicio exige acreditar comprobar creación de contenedores
 <!-- Hoja didáctica 7, ficha imprimible -->
 ## Laboratorio 03 · Prueba anónima de conexión
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -305,8 +298,6 @@ La corrección del ejercicio exige acreditar distinguir shell iniciado de consul
 ## Laboratorio 04 · Autenticación root de formación
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Comprobar authenticatedUsers y authInfo.
@@ -386,8 +377,6 @@ La corrección del ejercicio exige acreditar comprobar authenticatedUsers y auth
 <!-- Hoja didáctica 11, ficha imprimible -->
 ## Laboratorio 05 · Crear colección controlada
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -469,8 +458,6 @@ La corrección del ejercicio exige acreditar comprobar usuario lectorlab y docum
 ## Laboratorio 06 · Login de solo lectura
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Lectura permitida, escritura denegada como resultado esperado.
@@ -550,8 +537,6 @@ La corrección del ejercicio exige acreditar lectura permitida, escritura denega
 <!-- Hoja didáctica 15, ficha imprimible -->
 ## Laboratorio 07 · Base de autenticación equivocada
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -633,8 +618,6 @@ La corrección del ejercicio exige acreditar la autenticación debe fallar porqu
 ## Laboratorio 08 · Contraseña incorrecta
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Error Authentication failed esperado.
@@ -714,8 +697,6 @@ La corrección del ejercicio exige acreditar error Authentication failed esperad
 <!-- Hoja didáctica 19, ficha imprimible -->
 ## Laboratorio 09 · Escritura prohibida al lector
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -803,8 +784,6 @@ La corrección del ejercicio exige acreditar se espera Unauthorized; comprobar c
 ## Laboratorio 10 · Update prohibido al lector
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Se espera Unauthorized y la descripción original permanece.
@@ -890,8 +869,6 @@ La corrección del ejercicio exige acreditar se espera Unauthorized y la descrip
 <!-- Hoja didáctica 23, ficha imprimible -->
 ## Laboratorio 11 · Delete prohibido al lector
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -979,8 +956,6 @@ La corrección del ejercicio exige acreditar se espera Unauthorized y documento 
 ## Laboratorio 12 · Lista de usuarios con root
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Comprobar existencia y roles de lectorlab.
@@ -1066,8 +1041,6 @@ La corrección del ejercicio exige acreditar comprobar existencia y roles de lec
 <!-- Hoja didáctica 27, ficha imprimible -->
 ## Laboratorio 13 · Crear cuenta de auditoría
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
 
 ### Resultado profesional perseguido
 
@@ -1155,8 +1128,6 @@ La corrección del ejercicio exige acreditar verificar cuenta adicional de solo 
 ## Laboratorio 14 · Comprobar un rol real
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Leer privilegios efectivos según respuesta del servidor.
@@ -1242,8 +1213,6 @@ La corrección del ejercicio exige acreditar leer privilegios efectivos según r
 <!-- Hoja didáctica 31, ficha imprimible -->
 ## Laboratorio 15 · Crear usuario de escritura
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1331,8 +1300,6 @@ La corrección del ejercicio exige acreditar verificar que puede escribir en cur
 ## Laboratorio 16 · Retirar permisos temporalmente
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Tras retirar rol, editor deja de escribir.
@@ -1418,8 +1385,6 @@ La corrección del ejercicio exige acreditar tras retirar rol, editor deja de es
 <!-- Hoja didáctica 35, ficha imprimible -->
 ## Laboratorio 17 · Recuperar privilegios
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
 
 ### Resultado profesional perseguido
 
@@ -1507,8 +1472,6 @@ La corrección del ejercicio exige acreditar repetir operación permitida y regi
 ## Laboratorio 18 · Describir estructura de conexión
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Identificar host, puerto, base objetivo, usuario y authSource.
@@ -1589,8 +1552,6 @@ La corrección del ejercicio exige acreditar identificar host, puerto, base obje
 ## Laboratorio 19 · Probar desde MongoDB Compass
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Validar conexión con autenticación configurada por campos en Compass.
@@ -1670,8 +1631,6 @@ La corrección del ejercicio exige acreditar validar conexión con autenticació
 <!-- Hoja didáctica 41, ficha imprimible -->
 ## Laboratorio 20 · Prueba sin puerto publicado
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -1755,8 +1714,6 @@ La corrección del ejercicio exige acreditar comprobar que la escucha externa no
 ## Laboratorio 21 · Inspeccionar logs sin datos sensibles
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Observar mensajes del servicio y diferenciar fallos de arranque de autenticación.
@@ -1836,8 +1793,6 @@ La corrección del ejercicio exige acreditar observar mensajes del servicio y di
 <!-- Hoja didáctica 45, ficha imprimible -->
 ## Laboratorio 22 · Certificados: inspección X.509
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1920,11 +1875,9 @@ La corrección del ejercicio exige acreditar identificar emisor, nombre SAN y vi
 ## Laboratorio 23 · TLS: construir cadena de confianza
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
-Una conexión TLS validada con la CA permite ping; no autoriza automáticamente la lectura. En GitHub Actions el recorrido completo (incluida la creación del usuario X.509) se ejecuta mediante scripts/probar-seguridad.sh.
+Una conexión TLS validada con la CA permite ping; no autoriza automáticamente la lectura. El recorrido completo, incluida la creación del usuario X.509, puede ejecutarse con `scripts/probar-seguridad.sh` tras preparar los certificados y las credenciales.
 
 ### Dónde ejecutar y con qué preparación
 
@@ -1943,7 +1896,7 @@ Genera certificados docentes antes de la prueba. TLS y X.509 funcionan en MongoD
 
 ### Evidencia concreta a registrar
 
-Una conexión TLS validada con la CA permite ping; no autoriza automáticamente la lectura. En GitHub Actions el recorrido completo (incluida la creación del usuario X.509) se ejecuta mediante scripts/probar-seguridad.sh. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+Una conexión TLS validada con la CA permite ping; no autoriza automáticamente la lectura. El recorrido completo, incluida la creación del usuario X.509, puede ejecutarse con `scripts/probar-seguridad.sh` tras preparar los certificados y las credenciales. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
 
 > **Si no obtienes el resultado:** Generar certificados primero y arrancar mongo-tls con los certificados creados; sin TLS el acceso al tercer servidor debe fallar.
 
@@ -2002,8 +1955,6 @@ La corrección del ejercicio exige acreditar una conexión TLS validada con la C
 <!-- Hoja didáctica 49, ficha imprimible -->
 ## Laboratorio 24 · x509: conectar con identidad cliente
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -2085,8 +2036,6 @@ La corrección del ejercicio exige acreditar autenticación $external por certif
 ## Laboratorio 25 · LDAP: trazado de arquitectura
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Dibujar pasos de identidad, grupo y privilegio.
@@ -2167,8 +2116,6 @@ La corrección del ejercicio exige acreditar dibujar pasos de identidad, grupo y
 ## Laboratorio 26 · Cifrado en reposo y responsabilidad
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Explicar por qué persistencia en Docker no demuestra cifrado.
@@ -2248,8 +2195,6 @@ La corrección del ejercicio exige acreditar explicar por qué persistencia en D
 <!-- Hoja didáctica 55, ficha imprimible -->
 ## Laboratorio 27 · Auditoría final de seguridad
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
