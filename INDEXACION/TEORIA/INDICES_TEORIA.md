@@ -820,3 +820,231 @@ Para que la comparación tenga sentido debemos documentar:
 Una aplicación tiene tres operaciones: buscar un pedido por número, mostrar los últimos pedidos pagados y localizar etiquetas de riesgo en una lista. Propón un índice candidato para cada una y explica la función del campo o del orden de campos. A continuación indica qué revisarías con `explain` y cómo estimarías el coste de mantener esos índices ante nuevas ventas.
 
 No necesitas acertar todos los detalles de un plan sin ejecutarlo. Necesitas formular una hipótesis comprobable.
+
+
+---
+
+# Unidad 12. Qué ocurre dentro de un índice: del libro al árbol B
+
+## 12.1. Por qué no basta con guardar una lista ordenada en cualquier sitio
+
+Hasta ahora hemos comparado un índice con un catálogo alfabético. Esa imagen es útil, pero deja una pregunta sin contestar: si hay un millón de claves, ¿cómo puede el motor localizar rápidamente una zona pequeña sin leerlas todas desde el comienzo?
+
+Una manera ingenua sería guardar todos los números de venta en una lista y recorrerla hasta encontrar el número deseado. Pero eso sería otro recorrido secuencial, ahora sobre una lista en lugar de una colección. Para evitarlo se necesita una organización que permita **descartar grandes regiones de claves** en cada decisión.
+
+Los índices ordenados de MongoDB se basan en estructuras de tipo árbol B, que mantienen las claves organizadas en una forma adecuada para búsquedas y recorridos eficientes. No necesitamos implementar un árbol desde cero, pero sí comprender la intuición.
+
+## 12.2. El árbol como mapa de intervalos
+
+Imagina que la primera página de un índice permite decidir entre tres intervalos:
+
+```text
+                          ¿QUÉ NÚMERO BUSCAS?
+                    ┌─────────┼────────────┐
+                 1–999     1000–4999    5000–9999
+                   │           │             │
+               más claves  más claves    más claves
+                   │           │             │
+            referencia a documentos adecuados
+```
+
+Este dibujo **no reproduce la estructura física exacta de un índice MongoDB**. Representa una idea: cada decisión reduce el espacio de búsqueda. En un árbol B real, los nodos contienen varias claves y referencias que guían el descenso y facilitan recorridos ordenados.
+
+Si buscas la venta 8.700, no necesitas examinar todas las entradas correspondientes a 1–999. Puedes avanzar por la parte del árbol correspondiente al intervalo que incluye 8.700.
+
+## 12.3. Igualdad y rango recorren el árbol de forma diferente
+
+Una igualdad como:
+
+```javascript
+db.ventas.find({numero:8700})
+```
+
+puede dirigirse a la región donde estaría la clave buscada.
+
+En cambio, un rango pide varias claves consecutivas:
+
+```javascript
+db.ventas.find({
+  numero:{$gte:8700,$lt:8750}
+})
+```
+
+El motor localiza el inicio del intervalo y puede recorrer las entradas correspondientes hasta el final. Por eso un índice ordenado es útil no solo para identificar una venta, sino también para consultas por rangos.
+
+No concluyas que toda consulta con `$gte` es eficiente: si el intervalo cubre casi la colección entera, puede haber que recorrer muchísimas claves. La selectividad sigue importando.
+
+## 12.4. De una clave al documento: por qué aparece FETCH
+
+La estructura de índice mantiene claves y referencias que permiten localizar documentos. Si la aplicación pide campos que no están en el índice, MongoDB necesita recuperar esos documentos.
+
+Por ejemplo, suponiendo que solo existe un índice por `numero`:
+
+```javascript
+db.ventas.find({numero:8700},{numero:1,descripcion:1})
+```
+
+Aunque el índice localice la venta por número, la descripción debe obtenerse del documento. Esa recuperación explica conceptualmente una etapa `FETCH`. No se debe confundir `IXSCAN` con «la consulta nunca toca la colección».
+
+## 12.5. Por qué las inserciones requieren trabajo
+
+Si agregas una venta con número 8.701, la estructura debe incorporar esa nueva clave en su lugar correspondiente, manteniendo su organización. Con muchas inserciones, modificaciones y eliminaciones, el índice exige mantenimiento.
+
+El coste exacto depende de detalles de almacenamiento, carga de trabajo y estructura de datos. Para el alumno basta con comprender la causalidad: **el índice facilita ciertos accesos porque mantiene información adicional organizada; mantenerla no es gratis**.
+
+## 12.6. ¿Qué ocurre cuando muchos documentos comparten una clave?
+
+Imagina un índice ordenado por `estado`. Miles de ventas tienen el valor `pagada`. La organización del índice puede localizar la región de ese estado, pero si pedimos todas las pagadas sigue habiendo un conjunto enorme de coincidencias.
+
+No existe magia: un índice no convierte miles de respuestas en una sola. La estructura ayuda a **localizar candidatos**, pero la aplicación debe pagar el coste de procesar y entregar lo que solicita.
+
+### Ejercicio razonado
+
+Un alumno afirma que «como el índice es un árbol, cualquier consulta lee tres nodos y termina». ¿Qué error conceptual contiene? Respuesta: el número de pasos depende de la estructura y del número de claves que cumplan la consulta; además puede haber recuperación de documentos, ordenación y procesamiento adicional. El árbol facilita el acceso, no elimina todas las operaciones.
+
+---
+
+# Unidad 13. El optimizador de consultas y la lectura crítica de explain
+
+## 13.1. Tener un índice no obliga a utilizarlo
+
+Supón que la colección posee índices por `numero`, `estado` y `fecha`. Para una búsqueda concreta, MongoDB evalúa planes posibles y selecciona uno según la información y los mecanismos disponibles.
+
+No debemos imaginar que la aplicación escribe «utiliza ix_numero» cada vez que busca una venta. Normalmente escribimos una **consulta declarativa**: especificamos qué queremos obtener. El servidor decide cómo obtenerlo.
+
+Esa distinción explica por qué debemos comprobar los planes en lugar de asumir que el índice que acabamos de crear será siempre el elegido.
+
+## 13.2. Cómo se representa un plan
+
+Al llamar a:
+
+```javascript
+db.ventas.find({numero:199998}).explain("executionStats")
+```
+
+la respuesta contiene información de planificación y estadísticas. Puede haber diferentes capas del plan; las etapas más útiles para empezar son:
+
+- `COLLSCAN`: recorrido de documentos.
+- `IXSCAN`: recorrido de entradas de índice.
+- `FETCH`: recuperación de documentos a partir de candidatos.
+- `SORT`: ordenación independiente cuando no se obtiene directamente del acceso elegido.
+- `LIMIT` u otras etapas relacionadas con la cantidad devuelta.
+
+**No memorices una sola forma textual del JSON.** El formato exacto de `explain` y la representación de sus etapas puede variar entre versiones y motores de ejecución. Busca el significado de las operaciones, no solo una palabra a una profundidad fija.
+
+## 13.3. La diferencia entre plan ganador y estadísticas de ejecución
+
+En una explicación encontramos datos sobre el plan elegido y, con `executionStats`, contadores derivados de la ejecución. La elección del plan responde a «¿qué camino cree adecuado el motor?». Los contadores responden a «¿qué trabajo observamos al ejecutarlo?».
+
+Un `IXSCAN` puede ser un camino apropiado, pero aun así examinar decenas de miles de claves para resolver una consulta poco selectiva. Por eso debemos combinar la información cualitativa del plan con cifras como `totalKeysExamined` y `totalDocsExamined`.
+
+## 13.4. El peligro de interpretar una sola cifra
+
+Imagina dos planes:
+
+| Métrica | Plan A | Plan B |
+|---|---:|---:|
+| Documentos devueltos | 10 | 10 |
+| Claves examinadas | 25 | 18.000 |
+| Documentos examinados | 10 | 10 |
+| Ordenación independiente | No | Sí |
+
+En este escenario el Plan A parece evitar más trabajo para la misma consulta. Aun así, la decisión real requiere examinar carga, coste de mantener índices y repetibilidad de las pruebas.
+
+Un alumno podría elegir Plan B porque una ejecución aislada mostró menos milisegundos. Tal vez la caché, el orden de pruebas o la carga del ordenador influyeron. **No debemos convertir una anécdota temporal en una ley de optimización.**
+
+## 13.5. ¿Para qué sirve hint y cuándo evitarlo?
+
+`hint` permite solicitar un índice concreto en una consulta:
+
+```javascript
+db.ventas.find({clienteId:809})
+  .hint("ix_cliente")
+  .explain("executionStats")
+```
+
+En clase es útil para comparar alternativas manteniendo el resto constante. En producción, forzar un índice sin necesidad puede impedir que el optimizador utilice un plan mejor cuando cambian los datos.
+
+Una práctica responsable distingue:
+- **Experimento controlado:** utiliza `hint` para estudiar un índice.
+- **Consulta normal de aplicación:** deja al servidor elegir, salvo que exista una razón medida y documentada para intervenir.
+
+## 13.6. Planificar una investigación
+
+Cuando alguien informa «esta pantalla va lenta», no crees índices inmediatamente. Primero pregunta:
+
+1. ¿Qué operación es lenta y cuál es su consulta real?
+2. ¿Con qué frecuencia se ejecuta?
+3. ¿Qué filtros, proyección, ordenación y límite utiliza?
+4. ¿Cuántos documentos devuelve y cuántos examina?
+5. ¿Qué índices existen y cuáles podrían servir?
+6. ¿Qué alternativa podemos probar sin alterar datos reales?
+7. ¿Qué coste de mantenimiento tendría la mejora?
+
+Este protocolo evita optimizaciones basadas en intuición o en nombres de índices inventados.
+
+---
+
+# Unidad 14. Medir 200.000 y un millón de ventas sin falsear la conclusión
+
+## 14.1. Por qué usamos dos volúmenes de datos
+
+Con veinte ventas, casi cualquier operación parecerá instantánea en un ordenador moderno. Eso hace difícil observar las diferencias entre planes de acceso. Cargar 200.000 documentos y repetir el experimento con un millón permite comprobar cómo escala el trabajo lógico.
+
+No buscamos dramatizar tiempos ni medir la velocidad máxima de tu ordenador. Queremos observar cómo cambian las cantidades examinadas cuando crece la colección.
+
+## 14.2. Una comparación cuyo resultado tiene significado
+
+Elige una consulta por un número situado cerca del final de la colección:
+
+```javascript
+db.ventas.find({numero:199998})
+```
+
+Con 200.000 ventas, ese número existe. Sin un índice secundario por `numero`, MongoDB puede examinar un número grande de documentos. Después creas el índice y repites exactamente la búsqueda.
+
+Para un millón de ventas, debes **elegir un número que pertenezca al nuevo conjunto**, como 999.998. La condición lógica es la misma —buscar una venta concreta por número—, pero no puedes mantener sin pensar un identificador fuera de contexto.
+
+## 14.3. Qué debe registrarse
+
+Una tabla de laboratorio útil incluiría:
+
+| Elemento del experimento | 200.000 ventas | 1.000.000 ventas |
+|---|---|---|
+| Número de documentos cargados | Confirmado por conteo | Confirmado por conteo |
+| Filtro utilizado | Número próximo al final | Número próximo al final |
+| Índice disponible | Sí / no | Sí / no |
+| Plan | COLLSCAN / IXSCAN | COLLSCAN / IXSCAN |
+| Documentos examinados | Medición real | Medición real |
+| Claves examinadas | Medición real | Medición real |
+| Tiempo observado | Dato orientativo | Dato orientativo |
+
+El paso de 200.000 a un millón multiplica por cinco el volumen, pero eso no autoriza a afirmar de antemano que todos los tiempos se multiplicarán por cinco. El rendimiento real depende de recursos y de lo que el motor tiene que hacer.
+
+## 14.4. Errores que invalidan el experimento
+
+Una comparación deja de ser interpretable si:
+- El conjunto «sin índice» aún conserva el índice de una práctica previa.
+- Se busca un valor ausente y se compara con una búsqueda que sí devuelve documentos.
+- Se cambia la proyección de una ejecución a otra.
+- En una consulta se utiliza un límite y en la otra no.
+- Se comparan ordenadores, discos o condiciones de carga diferentes sin registrarlo.
+- Se promete una aceleración fija a partir de una sola ejecución temporal.
+
+**Una buena práctica puede mostrar que algo NO mejora**, si el índice elegido no se adapta a la consulta o si el coste de obtener muchos resultados domina el trabajo. Eso también es aprendizaje.
+
+## 14.5. La evidencia honesta
+
+Para justificar una decisión de índice, presenta una afirmación verificable:
+
+> «Para una búsqueda por número que devuelve un documento, la prueba con esta colección y este plan examinó muchos más documentos sin el índice que con el índice. Los tiempos observados son específicos de la ejecución».
+
+No la sustituyas por una afirmación absoluta:
+
+> «Un índice siempre hace que MongoDB sea cientos de veces más rápido».
+
+La primera se apoya en datos; la segunda ignora el tipo de consulta, el volumen devuelto, la caché y el coste de mantener la estructura.
+
+### Caso final de razonamiento
+
+Una tienda necesita consultar una venta exacta, listar ventas de un estado ordenadas por fecha, buscar texto en descripciones y encontrar puntos próximos. Explica por qué sería incorrecto resolver los cuatro problemas mediante un único índice `{numero:1}`. Propón el tipo de índice que estudiarías para cada uno y cómo comprobarías su utilidad antes de desplegarlo.
