@@ -924,3 +924,174 @@ No está permitido escribir como conclusión «seguridad comprobada» si no has 
 Una solución coherente separa tres identidades y limita sus privilegios. La cuenta lectora puede consultar y no modificar; la cuenta de escritura puede registrar pedidos, pero no administrar usuarios; la cuenta administrativa queda reservada a tareas especiales. Las conexiones y los secretos se protegen de acuerdo con el contexto. Cada permiso importante se comprueba con una operación real, incluida una denegación esperada.
 
 **Criterio de evaluación:** otra persona debe poder comprender qué protege tu propuesta, cuál es el límite de cada identidad y qué evidencia respalda tus afirmaciones.
+
+
+---
+
+# Laboratorio 9 — Reconocer y proteger secretos de configuración
+
+## Objetivo y problema
+
+Una aplicación que se conecta a MongoDB puede funcionar correctamente y al mismo tiempo exponer sus credenciales. Imagina que alguien sube a un repositorio público la contraseña administrativa dentro de un archivo de configuración. La aplicación seguirá conectando, pero una persona con acceso a ese fichero podría intentar utilizar la misma identidad.
+
+El objetivo de esta práctica es distinguir **datos públicos de configuración**, **credenciales privadas** y **material criptográfico confidencial**. No intentaremos construir un gestor empresarial de secretos dentro de un curso introductorio.
+
+### Paso 1. Reconocer los archivos
+
+Abre PowerShell o Bash en la raíz del repositorio. Debes localizar:
+
+- `compose.yaml`: describe qué contenedores hay y qué parámetros necesitan.
+- `.env.example`: muestra los nombres de variables esperados, con valores de demostración.
+- `.env`: tu copia local, con las contraseñas que has elegido para la práctica.
+- `.gitignore`: indica qué archivos locales no deben añadirse normalmente al control de versiones.
+
+Que el archivo `.env` empiece por un punto no significa que esté cifrado. Es texto de configuración que debe custodiarse.
+
+### Paso 2. Crear la copia privada
+
+En PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+En Bash:
+
+```bash
+cp .env.example .env
+```
+
+Edita los valores de `MONGO_ADMIN_PASSWORD`, `LAB_READER_PASSWORD` y `LAB_WRITER_PASSWORD`. Utiliza secretos **ficticios y exclusivos de este laboratorio**, nunca contraseñas de correo, empresa u otros sistemas.
+
+### Paso 3. Clasificar cinco ejemplos
+
+| Dato | ¿Publicarlo como ejemplo? | Razón |
+|---|---|---|
+| Nombre ficticio `lectorlab` | Sí | No demuestra identidad por sí solo |
+| Puerto local `27018` | Sí | Describe la infraestructura |
+| Contraseña verdadera | No | Podría permitir iniciar sesión |
+| Certificado público de una CA de prueba | Según contexto | No es la clave privada |
+| `server.pem` que incorpora clave privada | No | Contiene material secreto |
+
+El nombre de un usuario y la contraseña que demuestra ser ese usuario **no son lo mismo**.
+
+### Paso 4. Comprobar la exclusión del archivo
+
+Si tienes Git instalado, ejecuta:
+
+```bash
+git check-ignore .env
+```
+
+El resultado correcto normalmente indica que `.env` está ignorado. Si no tienes Git, abre `.gitignore` en un editor y verifica la exclusión. **Advertencia:** ignorar hoy un fichero no borra una contraseña que ya haya sido publicada en un commit anterior.
+
+### Paso 5. Interpretar la sustitución de variables
+
+El archivo Compose puede exigir una variable de contraseña administrativa. Al preparar los servicios, Docker Compose utiliza el valor de tu entorno o de `.env`. Eso evita escribir una contraseña concreta en el archivo compartido, pero **no cifra la variable ni sustituye un sistema profesional de secretos**.
+
+No pegues la salida íntegra de comandos que muestran configuración resuelta si puede contener valores privados.
+
+### Paso 6. Resolver un fallo habitual
+
+Un alumno inicia el servidor, luego cambia la contraseña en `.env` y deja de poder entrar.
+
+**Explicación:** la cuenta administradora se creó en la base cuando se inicializó el volumen por primera vez. Editar después la variable local **no rota automáticamente la credencial almacenada en MongoDB**.
+
+La solución es administrar y coordinar una rotación de contraseña. No elimines el volumen como respuesta instintiva; eso destruiría datos y cuentas de laboratorio.
+
+### Evaluación
+
+Explica por qué `.env` no es un almacén cifrado, por qué `.gitignore` no revoca una clave previamente filtrada y por qué una contraseña no debería aparecer ni en el código ni en capturas del terminal.
+
+---
+
+# Laboratorio 10 — Matriz de acceso: qué operaciones deben funcionar y cuáles no
+
+## Objetivo
+
+Vamos a verificar que los usuarios de laboratorio no solo se autentican correctamente, sino que tienen permisos diferentes. Una cuenta lectora deberá consultar datos, pero no actualizarlos ni borrarlos. La cuenta escritora sí podrá modificar documentos, sin convertirse por ello en administradora de MongoDB.
+
+### Paso 1. Comprobar el servidor y las cuentas
+
+En PowerShell o Bash, desde la raíz del repositorio:
+
+```bash
+docker compose up -d --wait mongo-seguridad
+```
+
+Las cuentas `lectorlab` y `escritorlab` deben existir desde el laboratorio 1. Si faltan, completa aquella preparación antes de continuar.
+
+### Paso 2. Conectar como lector
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase curso_seguridad --password
+```
+
+Introduce la contraseña del lector. Dentro de `mongosh`:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+El documento debe aparecer. Esta es nuestra **prueba positiva**: demuestra que la identidad puede leer el recurso permitido.
+
+### Paso 3. Intentar actualizar un documento
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.updateOne(
+  {_id:"demo-1"},
+  {$set:{texto:"no autorizado"}}
+)
+```
+
+**Resultado esperado:** denegación por falta de permiso de actualización.
+
+### Paso 4. Intentar borrar el documento
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.deleteOne({_id:"demo-1"})
+```
+
+También debe rechazarse. Comprueba después mediante `findOne` que el documento original continúa existiendo. La prueba no estaría bien si el mensaje pareciera correcto pero hubiéramos perdido datos.
+
+### Paso 5. Conectar como escritor
+
+Sal de `mongosh` escribiendo `exit`. Desde la terminal:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username escritorlab --authenticationDatabase curso_seguridad --password
+```
+
+Dentro del shell, inserta un documento distinto:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({
+  _id:"matriz-escritor",
+  texto:"insertado mediante rol readWrite"
+})
+```
+
+Si ya existe ese identificador porque repetiste la actividad, cambia únicamente el identificador de tu documento ficticio; no confundas un error por duplicado con un error de autorización.
+
+### Paso 6. Actualizar y comprobar
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.updateOne(
+  {_id:"matriz-escritor"},
+  {$set:{texto:"actualizado por escritor"}}
+)
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"matriz-escritor"})
+```
+
+Debe aparecer el texto actualizado. El rol `readWrite` permite escritura sobre esa base, pero **no concede por sí solo privilegios para administrar usuarios**.
+
+### Paso 7. Registrar resultados
+
+| Identidad | Consulta | Actualiza | Borra |
+|---|---|---|---|
+| `lectorlab` | Permitida | Denegada | Denegada |
+| `escritorlab` | Permitida | Permitida | Permitida |
+
+Anota los mensajes reales y explica por qué dos cuentas autenticadas pueden recibir respuestas distintas al ejecutar la misma operación.
+
+**Conclusión correcta:** los roles, no el simple hecho de introducir una contraseña válida, limitan qué acciones puede realizar cada identidad.
