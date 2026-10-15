@@ -1741,3 +1741,159 @@ Una prueba con datos ficticios puede enseñar a investigar errores de permisos, 
 5. ¿Qué riesgos introduces si eliminas todos los registros antes de investigar?
 
 **Resultado esperado:** una respuesta razonada, no una secuencia de comandos destructivos.
+
+
+---
+
+# Laboratorio 18 — Interpretar el resultado de una conexión sin confundir sus capas
+
+## Nuestro problema
+
+Una persona abre `mongosh` y consigue ejecutar `ping`. Después intenta consultar una colección y recibe una denegación. Considera que MongoDB no funciona. Vamos a demostrar por qué esas dos observaciones **no son contradictorias**.
+
+### Paso 1. Definir las cuatro comprobaciones
+
+Para un servidor que protege documentos hay cuatro preguntas:
+1. ¿El servicio está en ejecución y es alcanzable?
+2. ¿El cliente y el servidor han negociado correctamente el canal?
+3. ¿El servidor conoce la identidad presentada?
+4. ¿Esa identidad tiene permiso para la operación concreta?
+
+No necesitas dominar la criptografía para reconocer que una respuesta positiva a la primera pregunta no resuelve automáticamente las restantes.
+
+### Paso 2. Comprobar disponibilidad
+
+En PowerShell o Bash:
+
+```bash
+docker compose ps
+```
+
+Si `mongo-seguridad` está detenido, arráncalo:
+
+```bash
+docker compose up -d --wait mongo-seguridad
+```
+
+**Resultado esperado:** el servicio aparece en ejecución. Esto verifica el estado de Docker, no los permisos de una cuenta.
+
+### Paso 3. Comprobar respuesta del servidor
+
+Conecta como `adminlab` mediante el comando de la primera práctica. Dentro de `mongosh`:
+
+```javascript
+db.adminCommand({ping:1})
+```
+
+Una respuesta con `ok:1` muestra que el servidor responde a esa orden. No deduzcas que cualquier usuario podrá consultar o modificar cualquier colección.
+
+### Paso 4. Comprobar autenticación de una cuenta de lectura
+
+Cierra el shell administrativo. Desde PowerShell o Bash:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase curso_seguridad --password
+```
+
+Introduce la contraseña del lector. Si falla aquí, revisa la identidad, la contraseña y la base de autenticación, antes de estudiar permisos de escritura.
+
+### Paso 5. Comprobar una lectura
+
+En la sesión del lector:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+**Resultado esperado:** documento de prueba. La operación confirma que la cuenta ha conseguido consultar el recurso previsto.
+
+### Paso 6. Intentar una escritura que no se permite
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({
+  _id:"intento-sin-permiso-clase",
+  texto:"prueba negativa"
+})
+```
+
+**Resultado esperado:** denegación de autorización.
+
+Explica por qué el rechazo no contradice que `ping` o `findOne` funcionaran. La cuenta ha demostrado identidad y puede leer; no tiene permiso para insertar.
+
+### Paso 7. Preparar una matriz de resultados
+
+| Comprobación | Control | Resultado esperado |
+|---|---|---|
+| Servicio healthy | Disponibilidad | Positivo |
+| `ping` | Comunicación | Positivo |
+| Inicio de sesión lector | Autenticación | Positivo |
+| `findOne` | Autorización de lectura | Positivo |
+| `insertOne` lector | Autorización de escritura | Denegado |
+
+**Aprendizaje:** cada prueba debe estar vinculada a una propiedad concreta del sistema. Una comprobación de disponibilidad no sustituye una política de acceso.
+
+---
+
+# Laboratorio 19 — Diseñar pruebas que impidan confundir usuarios y servicios
+
+## Una pregunta de aplicación
+
+Imagina tres identidades:
+- una cuenta lectora para visualizar pedidos;
+- una cuenta escritora para registrar nuevos pedidos;
+- una cuenta administrativa reservada a gestión.
+
+Si las tres utilizan los mismos privilegios, una prueba en la que todo funciona no demostrará que haya separación de responsabilidades.
+
+### Paso 1. Formular las operaciones mínimas
+
+La aplicación lectora necesita consultar. La escritora necesita registrar pedidos. La administración prepara usuarios y permisos.
+
+Escribe:
+- Cuenta lectora: operaciones obligatorias: ______.
+- Cuenta escritora: operaciones obligatorias: ______.
+- Administración: operaciones reservadas: ______.
+
+No incluyas permisos «por si acaso». La finalidad es justificar cada capacidad.
+
+### Paso 2. Identificar qué no debe hacer el lector
+
+Un rol `read` sobre `curso_seguridad` no debería permitir `insertOne`, `updateOne` ni `deleteOne`. Tampoco debería administrar identidades.
+
+Si la aplicación de informes intenta esas acciones, puede ser que su propio código se esté excediendo respecto a su función.
+
+### Paso 3. Construir una prueba positiva y una negativa
+
+Para `lectorlab`:
+- positiva: consultar `demo-1`;
+- negativa: intentar insertar un documento ficticio.
+
+Para `escritorlab`:
+- positiva: insertar un documento ficticio;
+- negativa: intentar una tarea de administración que su rol de aplicación no concede.
+
+El ejercicio no exige ejecutar una operación administrativa destructiva. Debe quedar claro **qué permisos están fuera del rol**.
+
+### Paso 4. ¿Por qué no conceder permisos administrativos?
+
+Dar permisos más amplios puede ocultar el error inmediato, pero aumenta las consecuencias posibles de un fallo de aplicación o de una credencial expuesta.
+
+Lo correcto es determinar si la operación pertenece a la función del proceso. Si una pantalla de informes quiere gestionar usuarios, quizás hemos mezclado responsabilidades que deberían estar separadas.
+
+### Paso 5. Revisar un cambio temporal de rol
+
+Si una cuenta necesita escribir durante una tarea excepcional, esa ampliación debería justificarse y retirarse después. El laboratorio de concesión y revocación de roles demuestra cómo se puede ensayar el proceso.
+
+**No basta con comprobar que después de conceder un permiso funciona:** debemos volver a probar la denegación cuando el permiso deja de ser necesario.
+
+### Paso 6. Entrega razonada
+
+Escribe una respuesta de seis frases:
+1. Qué hace la cuenta lectora.
+2. Qué hace la cuenta escritora.
+3. Qué operaciones están reservadas a administración.
+4. Qué prueba positiva realizaste.
+5. Qué prueba negativa realizaste.
+6. Cómo comprobarías que una retirada de privilegios se aplicó.
+
+La respuesta debe permitir entender por qué los roles se diseñan a partir de responsabilidades y no de nombres agradables.
