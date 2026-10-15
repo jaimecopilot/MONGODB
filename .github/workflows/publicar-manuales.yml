@@ -1,0 +1,58 @@
+name: Publicar manuales PDF
+
+on:
+  push:
+    branches: [docs/publicar-pdfs-y-md]
+    paths:
+      - "INDEXACION/**/*.md"
+      - "SEGURIDAD/**/*.md"
+      - "DOCENCIA/**/*.md"
+      - "scripts/generar_manuales_pdf.py"
+      - ".github/workflows/publicar-manuales.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar-manuales-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generar-y-versionar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Dependencias para PDF
+        run: |
+          python -m pip install --disable-pip-version-check \
+            mistune==3.2.1 weasyprint==68.0 pypdf==5.9.0
+      - name: Renderizar y validar cuatro manuales y documentos docentes
+        run: python scripts/generar_manuales_pdf.py
+      - name: Comprobar firmas PDF
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for file in [*Path("INDEXACION").rglob("*.pdf"),
+                       *Path("SEGURIDAD").rglob("*.pdf"),
+                       *Path("DOCENCIA").rglob("*.pdf")]:
+              assert file.read_bytes()[:5] == b"%PDF-", file
+              print("PDF válido:", file, file.stat().st_size, "bytes")
+          PY
+      - name: Incorporar PDF al control de versiones
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add INDEXACION/TEORIA/*.pdf INDEXACION/PRACTICAS/*.pdf \
+                  SEGURIDAD/TEORIA/*.pdf SEGURIDAD/PRACTICAS/*.pdf \
+                  DOCENCIA/*.pdf
+          if git diff --cached --quiet; then
+            echo "Los PDF ya estan actualizados"
+          else
+            git commit -m "docs(pdf): publicar manuales y guia docente reproducibles"
+            git push origin "HEAD:\${GITHUB_REF_NAME}"
+          fi
