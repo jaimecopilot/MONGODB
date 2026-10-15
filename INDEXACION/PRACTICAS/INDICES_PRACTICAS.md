@@ -881,3 +881,257 @@ Explica con tus palabras:
 - qué riesgos introduce acumular índices indiscriminadamente.
 
 **Siguiente desafío:** repetir el experimento de índices simples con un millón de ventas, conservando idéntico filtro y registrando las métricas de ambos volúmenes.
+
+
+---
+
+# Laboratorio 7 — La misma búsqueda con 200.000 y un millón de ventas
+
+## Qué queremos demostrar
+
+Hemos dicho que un índice puede evitar que MongoDB examine enormes cantidades de documentos para encontrar uno. ¿Sigue siendo relevante cuando la colección pasa de 200.000 a **1.000.000 de ventas**?
+
+Vamos a responder mediante una experiencia repetible. No vamos a utilizar cronómetros manuales ni proclamar que la consulta es «x veces más rápida». Recogeremos el número real de documentos y claves examinados antes y después de crear un índice.
+
+Este laboratorio **se realiza al final** de las prácticas de índices porque el script de carga borra y recrea la colección `curso_indices.ventas`. No ejecutes la carga si deseas conservar los índices que preparaste para ejercicios anteriores.
+
+### Paso 1. Conservar las observaciones anteriores
+
+Antes de modificar datos, copia en tu cuaderno las métricas registradas en el Laboratorio 1 con 200.000 ventas:
+
+| Métrica | Sin índice | Con índice |
+|---|---:|---:|
+| `nReturned` | ______ | ______ |
+| `totalDocsExamined` | ______ | ______ |
+| `totalKeysExamined` | ______ | ______ |
+| `executionTimeMillis` | ______ | ______ |
+
+Si no guardaste esos datos, no los inventes. Puedes repetir la primera práctica completa y anotar las cifras antes de pasar al millón.
+
+**Lo importante:** registra valores medidos, no valores sugeridos por otra persona. El número 200.000 indica el volumen cargado, no que cualquier plan vaya a examinar exactamente esa cantidad.
+
+### Paso 2. Comprobar recursos y servicio
+
+Cargar un millón de documentos requiere más tiempo y espacio que cargar 200.000. Asegúrate de disponer de suficiente almacenamiento y memoria para Docker. Durante el proceso verás mensajes de progreso; no interpretes que una carga de muchos documentos está rota solo porque tarda más que la primera.
+
+Desde tu terminal en la carpeta principal:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose ps
+```
+
+Si el servicio no arranca, consulta `docker compose logs --tail=80 mongo-indices`. No intentes medir consultas hasta que la instancia esté preparada.
+
+### Paso 3. Recargar la colección con un millón de documentos
+
+```bash
+docker compose exec -T -e VENTAS=1000000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
+```
+
+**Esta operación es destructiva para la colección de práctica.** Elimina `curso_indices.ventas` y la reconstruye con un millón de ventas sintéticas. Si estabas investigando un índice específico, tendrás que volver a crearlo cuando lo necesites.
+
+Mientras se ejecuta, fíjate en los mensajes de avance. No cierres la terminal antes de que el proceso termine o informe de un error.
+
+### Paso 4. Verificar que no estamos comparando una carga parcial
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({}))'
+```
+
+Esperamos `1000000`. Si la cifra es menor, revisa el paso de carga. No continúes: el experimento depende del tamaño de la colección.
+
+Comprueba también que no existen índices secundarios:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes())'
+```
+
+En una colección recién cargada por nuestro script debe encontrarse únicamente `_id_`. Si ves índices adicionales, la línea base se ha contaminado y el script `02_antes.js` lo señalará.
+
+### Paso 5. Repetir la medición SIN índice secundario
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
+```
+
+El script elige automáticamente una venta próxima al final de la colección. Con un millón de ventas, el valor buscado se ajusta al volumen, de modo que sigue siendo un documento existente.
+
+Anota el plan y los contadores. No confundas que `nReturned` sea 1 con que el motor solo haya examinado 1 documento.
+
+### Paso 6. Crear los índices de prácticas
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
+```
+
+El primer índice por `numero` ayuda a localizar la venta exacta; el script también prepara otros índices de las prácticas. Comprueba que aparece `ix_numero` en el listado.
+
+**Pregúntate:** ¿por qué crear un índice tarda más sobre un millón de documentos que sobre veinte? Porque el servidor debe procesar un volumen mayor de datos y construir la nueva estructura.
+
+### Paso 7. Repetir la medición CON índice
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/04_despues.js
+```
+
+Observa el cambio de plan y de documentos examinados. Para la búsqueda exacta por número, esperamos que un índice útil reduzca de manera drástica los documentos candidatos y que la operación encuentre la misma venta solicitada.
+
+Completa tu segunda tabla:
+
+| Métrica | 1.000.000 sin índice | 1.000.000 con índice |
+|---|---:|---:|
+| Documentos devueltos | ____ | ____ |
+| Documentos examinados | ____ | ____ |
+| Claves examinadas | ____ | ____ |
+| Plan | ____ | ____ |
+| Tiempo orientativo | ____ | ____ |
+
+### Paso 8. Comparar volúmenes de forma razonada
+
+Ahora ya tienes cuatro situaciones:
+1. 200.000 documentos, sin índice.
+2. 200.000 documentos, con índice.
+3. 1.000.000 de documentos, sin índice.
+4. 1.000.000 de documentos, con índice.
+
+Responde:
+- ¿Cómo cambia el trabajo de un `COLLSCAN` cuando la colección crece?
+- ¿Cuántos documentos necesita examinar el caso indexado para una venta identificada de forma unívoca?
+- ¿Por qué no debemos extrapolar automáticamente el mismo factor a los milisegundos?
+- ¿Qué otros costes habremos añadido al crear índices sobre un millón de ventas?
+
+**Solución comentada:** cuando el documento buscado está cerca del final y no existe un índice útil, el servidor puede verse obligado a inspeccionar una gran parte de la colección. Un índice selectivo permite dirigirse a pocas claves y documentos, pero también ocupa espacio y requiere trabajo de construcción y mantenimiento.
+
+### Paso 9. Detectar un experimento inválido
+
+Un compañero afirma que su índice funciona porque después de crearlo consiguió `nReturned:0` y `totalDocsExamined:0`. ¿Qué puede haber ocurrido?
+
+**Respuesta:** quizá consultó una venta inexistente. No es correcto celebrar una consulta que no encontró el documento buscado. Primero debemos comprobar que estamos comparando **la misma necesidad de información** y que el resultado es correcto.
+
+Otro compañero compara un filtro por `numero` sin índice con un filtro por `clienteId` tras indexarlo. Tampoco es una comparación limpia: cambió tanto el índice como la pregunta.
+
+### Paso 10. Conservar o eliminar los datos
+
+Si vas a seguir trabajando con otras prácticas, conserva el servicio y los datos. Puedes cerrar el shell o detener el contenedor:
+
+```bash
+docker compose stop mongo-indices
+```
+
+No ejecutes `down --volumes` por costumbre. Los datos del laboratorio son ficticios, pero debes comprender el efecto de eliminar volúmenes antes de hacerlo.
+
+---
+
+# Laboratorio 8 — Diseñar índices a partir de una necesidad comercial, no de una lista de tipos
+
+## El encargo
+
+Una empresa que vende productos en cuatro ciudades te pide mejorar tres pantallas:
+
+- **Pantalla A:** localizar una venta por número cuando llama un cliente.
+- **Pantalla B:** mostrar las últimas diez ventas pagadas cuyo importe supera 500 euros.
+- **Pantalla C:** mostrar ventas de un cliente, pero únicamente número, fecha e importe.
+
+No nos han pedido «crear tres índices». Nos han pedido **responder tres preguntas de negocio**. Tú deberás justificar qué índice elegirías y cuál podría tener un coste innecesario.
+
+### Paso 1. Escribir las consultas antes de crear nada
+
+Dentro de `mongosh` y después de seleccionar `curso_indices`:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+```
+
+Para A:
+
+```javascript
+c.find({numero:199998})
+```
+
+Para B:
+
+```javascript
+c.find({estado:"pagada",importe:{$gt:500}})
+ .sort({fecha:-1})
+ .limit(10)
+```
+
+Para C:
+
+```javascript
+c.find(
+  {clienteId:809},
+  {_id:0,numero:1,fecha:1,importe:1}
+).limit(20)
+```
+
+Lee cada comando en voz alta describiendo el filtro, la proyección, la ordenación y el límite. Si no puedes hacerlo, todavía no tiene sentido elegir índices.
+
+### Paso 2. Elegir un índice candidato para A
+
+La pantalla A utiliza una igualdad sobre un valor que identifica una venta concreta. El candidato natural es `{numero:1}`, con unicidad si esa es una regla real del dominio.
+
+¿Por qué no incluir otros diez campos? Porque la consulta solo necesita localizar por número; mantener índices grandes puede añadir coste sin aportar valor para esta pregunta.
+
+### Paso 3. Elegir un índice candidato para B
+
+La pantalla B combina igualdad de estado, ordenación descendente por fecha y rango de importe. Podemos estudiar:
+
+```javascript
+{estado:1,fecha:-1,importe:1}
+```
+
+Este es un candidato ESR que trata de conservar la ordenación por fecha dentro de cada estado. También podemos comparar una alternativa ERS:
+
+```javascript
+{estado:1,importe:1,fecha:-1}
+```
+
+No afirmes que una es la mejor sin medir; la segunda puede reducir claves recorridas en un rango altamente selectivo, pero quizás requiera ordenar los resultados.
+
+### Paso 4. Diseñar un índice para C y reflexionar sobre cobertura
+
+La pantalla C filtra por cliente y proyecta número, fecha e importe. Un candidato podría ser:
+
+```javascript
+{clienteId:1,numero:1,fecha:1,importe:1}
+```
+
+Puede cubrir la consulta si la proyección y las demás condiciones lo permiten. Sin embargo, ¿merece la pena incorporar esos cuatro campos para una pantalla utilizada una vez al día? La respuesta depende de frecuencia, tamaño de los datos y coste de escritura.
+
+Un índice que cubre una consulta no es automáticamente la mejor elección para toda la aplicación.
+
+### Paso 5. Elaborar una propuesta defendible
+
+Prepara una tabla:
+
+| Pantalla | Índice candidato | Beneficio esperado | Coste o riesgo |
+|---|---|---|---|
+| A | ______ | ______ | ______ |
+| B | ______ | ______ | ______ |
+| C | ______ | ______ | ______ |
+
+Cada fila debe contener una justificación concreta. No basta escribir `IXSCAN` como beneficio: explica qué parte del filtro u ordenación podría utilizarse desde el índice.
+
+### Paso 6. Medir en MongoDB
+
+Si ya existen los índices de los laboratorios anteriores, comprueba cuáles están disponibles mediante:
+
+```javascript
+c.getIndexes()
+```
+
+Luego ejecuta cada consulta con `explain("executionStats")`. Observa planes, documentos devueltos, claves examinadas, documentos examinados y etapas de ordenación.
+
+Si todavía no existe un índice candidato, puedes crearlo **en el entorno de laboratorio**, ejecutar la consulta y comparar su plan. Documenta siempre qué índice acabas de crear para poder distinguir lo anterior de lo nuevo.
+
+### Paso 7. Presentar conclusiones comprensibles
+
+No entregues un JSON enorme sin explicación. Prepara un resumen para la persona responsable de la empresa:
+
+- «La pantalla A busca una venta concreta. Un índice por número permite localizarla sin recorrer toda la colección».
+- «La pantalla B es más compleja porque además de filtrar debe ordenar. Hemos medido dos estrategias y observado el trabajo de cada una».
+- «La pantalla C solo necesita algunos campos. Una proyección adecuada puede evitar transferir datos innecesarios y un índice estudiado podría cubrir la consulta».
+
+**Evaluación:** si alguien que no conoce `mongosh` puede entender qué problema resolviste, has completado la parte profesional del ejercicio. Si solo ve una lista de comandos, todavía falta tu explicación.
