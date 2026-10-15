@@ -1374,3 +1374,480 @@ Completa:
 - ¿Qué otras consultas podrían necesitarlo?: ______.
 
 **Conclusión:** decidir si eliminar un índice exige comprender el conjunto de consultas de la aplicación, no una única medición. En producción los cambios deben estudiarse con datos de uso, pruebas y procedimientos de recuperación.
+
+
+---
+
+# Laboratorio 11 — Diagnosticar una consulta que devuelve cero ventas
+
+## El error que vamos a investigar
+
+Una persona afirma que el índice de ventas «ha dejado de funcionar» porque su consulta devuelve cero resultados. Lo primero que debes aprender es que **cero resultados no demuestra que el índice esté roto**. Una consulta puede ser perfectamente correcta, ejecutarse sin errores y devolver cero simplemente porque no existe un documento que cumpla su filtro.
+
+Vamos a distinguir cuatro causas que, desde una pantalla de usuario, pueden parecer iguales: filtro incorrecto, campo mal escrito, base de datos equivocada y documento realmente inexistente.
+
+### Preparación
+
+Este ejercicio **no requiere borrar ni recargar las ventas**. Utiliza las que ya están almacenadas en `curso_indices.ventas`. Abre una terminal en la raíz del proyecto:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
+```
+
+La primera línea se ejecuta en PowerShell o Bash. La segunda abre `mongosh` dentro del contenedor. A partir de ahora los ejemplos JavaScript se escriben **dentro de `mongosh`**.
+
+### Paso 1. Comprobar si existen datos
+
+```javascript
+const ventas = db.getSiblingDB("curso_indices").ventas;
+ventas.countDocuments({})
+```
+
+Debes obtener una cifra positiva. Si aparece cero, no continúes buscando un fallo de índices: aún no has confirmado que existe el conjunto de datos. Realiza la carga del primer laboratorio antes de seguir.
+
+### Paso 2. Buscar un número existente
+
+```javascript
+ventas.findOne({numero:1})
+```
+
+El generador docente crea números consecutivos desde uno. Por tanto, debería aparecer un documento cuyo campo `numero` sea uno. Observa su `estado`, `importe` y `clienteId`.
+
+**Anota los tres valores reales**. No copies los de este texto: vamos a trabajar sobre lo que contenga tu base.
+
+### Paso 3. Buscar un número inexistente
+
+```javascript
+ventas.findOne({numero:-999})
+```
+
+Este filtro busca un número que no forma parte de la secuencia de ventas generada. Si aparece `null` o no se encuentra un documento, la explicación es sencilla: no existe una venta con ese identificador. No hay un error de conexión ni una violación de la integridad.
+
+### Paso 4. Introducir un nombre de campo equivocado
+
+```javascript
+ventas.findOne({número:1})
+```
+
+Fíjate en la tilde: el generador creó `numero` sin tilde. MongoDB no interpreta ambos nombres como sinónimos. **No se puede solucionar esta diferencia creando un índice de forma indiscriminada**: primero hay que corregir el filtro.
+
+Si obtienes cero resultados, explica por qué esta situación es distinta de buscar el número -999: ahora la base sí contiene el identificador uno, pero hemos escrito mal el campo.
+
+### Paso 5. Consultar otra base de datos
+
+Compara:
+
+```javascript
+db.getSiblingDB("curso_indices").ventas.findOne({numero:1})
+db.getSiblingDB("otra_base").ventas.findOne({numero:1})
+```
+
+En el laboratorio solo preparamos las ventas dentro de `curso_indices`. Si en `otra_base` no existe esa colección, la consulta no encontrará el documento. Esto demuestra que **el nombre de la base también forma parte del contexto de cada operación**.
+
+No introduzcas datos en `otra_base` para «arreglar» el resultado: la pregunta correcta se refiere a `curso_indices`.
+
+### Paso 6. Comparar un filtro de igualdad con un rango
+
+```javascript
+ventas.find({importe:500}).limit(3).toArray()
+ventas.find({importe:{$gt:500}}).limit(3).toArray()
+```
+
+La primera pide exactamente 500. La segunda pide cualquier importe superior a 500. Pueden devolver cantidades muy distintas, incluso si hay un índice por importe. El índice no cambia el significado del símbolo `$gt`.
+
+### Paso 7. Verificar sin confundir la consulta con el plan
+
+Para una búsqueda que encuentra una venta:
+
+```javascript
+const e = ventas.find({numero:1}).explain("executionStats");
+printjson({
+  encontrados:e.executionStats.nReturned,
+  examinados:e.executionStats.totalDocsExamined,
+  claves:e.executionStats.totalKeysExamined
+});
+```
+
+Ahora repite con `numero:-999`. Es posible que un índice localice rápidamente que la clave no existe y examine muy poco. Ese resultado no demuestra que la segunda consulta «sea mejor»: las preguntas tienen resultados distintos.
+
+### Paso 8. Redactar un diagnóstico profesional
+
+Completa una tabla con **tus propias observaciones**:
+
+| Consulta | Resultado esperado | Causa si devuelve cero |
+|---|---|---|
+| `numero:1` | Existe | Revisar carga o base de datos |
+| `numero:-999` | No existe | Valor ausente |
+| `número:1` | No existe | Campo escrito de otro modo |
+| Otra base de datos | No existe | Contexto equivocado |
+
+Explica por qué cada caso requiere una corrección diferente. El aprendizaje clave es que **optimizar una consulta incorrecta no convierte su resultado en correcto**.
+
+---
+
+# Laboratorio 12 — Orden estable y paginación: el problema de las fechas empatadas
+
+## Una pantalla puede mostrar diez resultados distintos sin que se haya perdido ninguno
+
+La empresa quiere mostrar las diez ventas pagadas más recientes. Has aprendido a escribir `sort({fecha:-1}).limit(10)`. Pero ahora aparece una incidencia: al repetir la pantalla, en ocasiones los números de venta en la última posición no son los mismos.
+
+¿Se ha perdido información? No necesariamente. Si varios documentos comparten fecha, ordenar únicamente por fecha no define **qué documento va primero dentro del empate**. Cuando además utilizamos un límite de diez, los empates cercanos al corte pueden influir en qué documentos aparecen.
+
+Este ejercicio enseña algo imprescindible en aplicaciones reales: **ordenar por un campo que puede repetirse no garantiza un orden total**.
+
+### Paso 1. Crear una colección de solo seis documentos
+
+Usaremos una colección de clase independiente para comprender el problema sin depender de 200.000 ventas. Dentro de `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.orden_empates_clase.drop();
+d.orden_empates_clase.insertMany([
+  {_id:1,estado:"pagada",fecha:ISODate("2025-05-01"),importe:90},
+  {_id:2,estado:"pagada",fecha:ISODate("2025-05-03"),importe:110},
+  {_id:3,estado:"pagada",fecha:ISODate("2025-05-03"),importe:120},
+  {_id:4,estado:"pagada",fecha:ISODate("2025-05-03"),importe:130},
+  {_id:5,estado:"pagada",fecha:ISODate("2025-05-02"),importe:140},
+  {_id:6,estado:"pendiente",fecha:ISODate("2025-05-04"),importe:150}
+]);
+```
+
+El `drop` solo elimina `orden_empates_clase`, una colección de prueba. Las ventas principales no se modifican.
+
+### Paso 2. Ordenar exclusivamente por fecha
+
+```javascript
+d.orden_empates_clase.find(
+  {estado:"pagada"}
+).sort({fecha:-1}).limit(2).toArray()
+```
+
+Los documentos del día 3 deben aparecer antes que los del día 2. Pero existen **tres ventas pagadas del día 3**, todas empatadas en `fecha`. Con un límite de dos, ¿cuáles deben aparecer? El filtro y la ordenación no especifican cómo resolver ese empate.
+
+**No interpretes que falta un documento de la colección:** limitaste explícitamente los resultados a dos. Los demás continúan almacenados.
+
+### Paso 3. Crear un orden total
+
+Añade el identificador como criterio de desempate:
+
+```javascript
+d.orden_empates_clase.find(
+  {estado:"pagada"}
+).sort({fecha:-1,_id:1}).limit(2).toArray()
+```
+
+Ahora el orden lógico es:
+1. Primero la fecha descendente.
+2. Para fechas idénticas, identificador ascendente.
+
+**Resultado esperado:** aparecen los documentos del día 3 con identificadores 2 y 3. Ya no hemos dejado el empate sin resolver.
+
+### Paso 4. Comparar índices candidatos
+
+```javascript
+d.orden_empates_clase.createIndex(
+  {estado:1,fecha:-1},
+  {name:"ix_sin_desempate"}
+);
+d.orden_empates_clase.createIndex(
+  {estado:1,fecha:-1,_id:1},
+  {name:"ix_con_desempate"}
+);
+```
+
+El primer índice ordena por estado y fecha, pero no contiene como tercera clave explícita el desempate que solicita la consulta. El segundo sí incorpora los tres campos que estamos estudiando.
+
+No concluyas automáticamente cuál elegirá el optimizador. Usa `explain` para observarlo; si quieres comparar, emplea `hint` de forma controlada sobre una consulta idéntica.
+
+### Paso 5. Visualizar el plan
+
+```javascript
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1})
+  .limit(2)
+  .hint("ix_con_desempate")
+  .explain("executionStats")
+```
+
+Observa el plan, las claves examinadas y el resultado. Con seis documentos el tiempo será poco significativo. La práctica es de **semántica y diseño de índices**, no una carrera de milisegundos.
+
+### Paso 6. Paginación con skip y limit
+
+Podemos pedir «la primera página» de dos documentos y la segunda página de dos:
+
+```javascript
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1}).skip(0).limit(2).toArray()
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1}).skip(2).limit(2).toArray()
+```
+
+`skip` indica cuántos resultados se omiten después de aplicar el orden. En esta colección pequeña es útil para aprender. Sobre colecciones grandes, omitir muchos resultados puede implicar recorrerlos, por lo que la paginación por desplazamiento puede encarecerse.
+
+### Paso 7. Comprender la paginación por cursor
+
+Cuando se ordena por fecha e identificador, es posible diseñar una paginación basada en el último par de valores visto, en vez de omitir miles de documentos. Esto requiere expresar correctamente una condición de continuación coherente con las direcciones de ordenación.
+
+No vamos a convertir un ejemplo introductorio en una arquitectura de paginación profesional completa, pero **sí debemos comprender por qué el desempate es imprescindible** para un cursor estable.
+
+### Paso 8. Comprobar que todo sigue en la colección
+
+```javascript
+d.orden_empates_clase.countDocuments({})
+```
+
+Debe devolver seis. No confundas cantidad almacenada y cantidad mostrada por una página.
+
+### Actividad final
+
+Explica por qué estos dos fragmentos expresan pedidos diferentes:
+
+```javascript
+.sort({fecha:-1}).limit(2)
+.sort({fecha:-1,_id:1}).limit(2)
+```
+
+Tu respuesta debe mencionar los empates, el criterio secundario y el hecho de que el límite actúa sobre una secuencia ordenada. La aplicación no puede asumir que MongoDB adivinará el orden de negocio que nadie especificó.
+
+---
+
+# Laboratorio 13 — ¿Qué ocurre al modificar una clave de índice?
+
+## Un índice no es una fotografía congelada
+
+Hasta ahora hemos creado índices y ejecutado consultas. Pero una base de datos real cambia: se insertan ventas, se actualizan sus estados y se corrigen importes. MongoDB debe mantener los índices coherentes con esos cambios.
+
+Si una aplicación modifica una venta de `pendiente` a `pagada`, un índice por `estado` no puede seguir tratando el documento como pendiente. La actualización de los datos debe reflejarse en las estructuras de acceso.
+
+Vamos a observarlo en una colección diminuta que podemos modificar sin riesgo.
+
+### Paso 1. Preparar los datos
+
+Dentro de `mongosh` conectado a la instancia `mongo-indices`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.cambios_indice_clase.drop();
+d.cambios_indice_clase.insertMany([
+  {_id:1,estado:"pendiente",importe:45},
+  {_id:2,estado:"pagada",importe:70},
+  {_id:3,estado:"pagada",importe:80}
+]);
+```
+
+Comprueba que hay una pendiente y dos pagadas:
+
+```javascript
+d.cambios_indice_clase.countDocuments({estado:"pendiente"})
+d.cambios_indice_clase.countDocuments({estado:"pagada"})
+```
+
+Esperamos uno y dos, respectivamente.
+
+### Paso 2. Crear un índice compuesto
+
+```javascript
+d.cambios_indice_clase.createIndex(
+  {estado:1,importe:1},
+  {name:"ix_estado_importe"}
+);
+```
+
+Ahora el índice organiza las ventas primero por estado y, dentro de cada estado, por importe. Si la aplicación busca todas las pagadas, puede beneficiarse de ese índice según el plan elegido.
+
+### Paso 3. Modificar el estado
+
+```javascript
+d.cambios_indice_clase.updateOne(
+  {_id:1},
+  {$set:{estado:"pagada"}}
+);
+```
+
+**Resultado esperado:** una actualización reconocida. La venta identificada con uno ya no pertenece lógicamente al conjunto de pendientes.
+
+Vuelve a contar:
+
+```javascript
+d.cambios_indice_clase.countDocuments({estado:"pendiente"})
+d.cambios_indice_clase.countDocuments({estado:"pagada"})
+```
+
+Ahora esperamos cero pendientes y tres pagadas.
+
+### Paso 4. Forzar el índice como instrumento de estudio
+
+```javascript
+d.cambios_indice_clase.find({estado:"pagada"})
+ .hint("ix_estado_importe").toArray()
+```
+
+Deben aparecer los tres documentos. Esto ilustra que el índice refleja la información actual, no la que tenía el documento cuando creamos el índice.
+
+### Paso 5. Actualizar el importe
+
+```javascript
+d.cambios_indice_clase.updateOne(
+  {_id:2},
+  {$set:{importe:10}}
+);
+```
+
+Consulta las pagadas ordenadas por importe:
+
+```javascript
+d.cambios_indice_clase.find({estado:"pagada"})
+ .sort({importe:1})
+ .hint("ix_estado_importe").toArray()
+```
+
+La venta dos debe aparecer con importe diez. Los índices no «guardan el valor antiguo» como si fueran un archivo de consulta manual que nunca se actualiza.
+
+### Paso 6. Comprender el coste de mantenimiento
+
+Cada inserción, actualización o borrado que afecta a campos indexados puede requerir modificar las entradas correspondientes. Por eso los índices tienen un coste de escritura.
+
+**Pregunta profesional:** ¿por qué no deberíamos crear un índice compuesto enorme que contenga todos los campos de una venta solo para evitar algunas recuperaciones de documentos?
+
+Respuesta orientativa: porque aumenta el tamaño y el trabajo de mantenerlo. Hay que demostrar que las consultas justifican ese coste.
+
+### Paso 7. Probar una restricción de integridad
+
+Crea un índice único sobre un campo de ejemplo en una colección aislada:
+
+```javascript
+d.codigo_unico_clase.drop();
+d.codigo_unico_clase.createIndex({codigo:1},{unique:true});
+d.codigo_unico_clase.insertMany([
+  {_id:1,codigo:"A"},
+  {_id:2,codigo:"B"}
+]);
+```
+
+Ahora intenta actualizar el código B por A:
+
+```javascript
+d.codigo_unico_clase.updateOne({_id:2},{$set:{codigo:"A"}})
+```
+
+**Resultado esperado:** un error de clave duplicada. Eso demuestra que una restricción unique no se aplica únicamente al insertar: también protege actualizaciones.
+
+### Paso 8. Confirmar que el dato original permanece
+
+```javascript
+d.codigo_unico_clase.findOne({_id:2})
+```
+
+El código debe seguir siendo B. Si estuvieras escribiendo una aplicación, tendrías que decidir cómo comunicar al usuario que su actualización infringió una regla.
+
+### Preguntas de comprensión
+
+- ¿Qué observación demuestra que el índice sigue representando los datos actuales?
+- ¿Por qué el índice unique debe comprobar también una actualización?
+- ¿Qué relación existe entre más índices y mayor trabajo de escritura?
+- ¿Por qué una restricción de negocio no debería implementarse únicamente con una comprobación manual en la pantalla de la aplicación?
+
+---
+
+# Laboratorio 14 — Elaborar un informe de rendimiento que otra persona pueda entender
+
+## Una prueba no sirve de mucho si nadie puede interpretarla
+
+Imagina que tu responsable te pide «demuéstrame que el nuevo índice merece la pena». No bastará con enviar un archivo JSON de `explain` de mil líneas ni con afirmar «en mi ordenador funcionaba rápido». Hay que construir una explicación que relacione una consulta real, los datos disponibles, el plan y los resultados.
+
+Este laboratorio no exige crear índices nuevos. **Reutiliza resultados observados** y te enseña a redactar una conclusión técnica rigurosa.
+
+### Paso 1. Identificar la necesidad
+
+Describe la pantalla o proceso que estudiaste. Ejemplo:
+
+> «Una aplicación de atención al cliente necesita encontrar rápidamente una venta por su número».
+
+Es mucho mejor que escribir «optimización del índice ix_numero», porque primero explica el propósito del sistema.
+
+### Paso 2. Documentar el filtro exacto
+
+Por ejemplo:
+
+```javascript
+db.getSiblingDB("curso_indices").ventas.find({numero:199998})
+```
+
+Aclara que el número concreto debe existir en el conjunto cargado y que la consulta devuelve una venta identificada de forma inequívoca.
+
+### Paso 3. Registrar el volumen y el estado de los índices
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
+c.getIndexes()
+```
+
+Escribe cuántos documentos había, qué índices relevantes existían y si la medición procede de una colección recién cargada o de un entorno con varios índices de prácticas anteriores.
+
+No mezcles métricas de estados distintos. Si recargaste la colección, posiblemente cambió el catálogo de índices.
+
+### Paso 4. Escoger métricas con significado
+
+Un resumen útil:
+
+| Dato | Sin índice | Con índice |
+|---|---:|---:|
+| Documentos devueltos | Medido | Medido |
+| Documentos examinados | Medido | Medido |
+| Claves examinadas | Medido | Medido |
+| Etapas principales | Observadas | Observadas |
+| Tiempo de esa ejecución | Observado | Observado |
+
+Cuando no dispongas del estado «sin índice» porque ya creaste estructuras, no lo inventes. Repite el experimento en el laboratorio o explica que solo tienes evidencia parcial.
+
+### Paso 5. Comprobar si la comparación es justa
+
+Pregunta:
+- ¿La consulta era la misma?
+- ¿La cantidad de datos era la misma?
+- ¿La proyección y el límite coincidían?
+- ¿El documento existía en ambas mediciones?
+- ¿Sabemos qué índice se utilizó?
+- ¿Se ejecutó en un entorno comparable?
+
+Si alguna respuesta es no, el informe debe indicar esa limitación. La honestidad de la medición vale más que una cifra espectacular.
+
+### Paso 6. Explicar la diferencia entre hechos e inferencias
+
+**Hecho observado:** «En una ejecución, MongoDB examinó 200.000 documentos sin índice y uno después de crear un índice por número».
+
+**Interpretación razonable:** «En esta búsqueda muy selectiva, el índice redujo el trabajo necesario para localizar el documento».
+
+**Afirmación no respaldada:** «Cualquier consulta será 200.000 veces más rápida».
+
+Separar estas frases es parte de aprender a evaluar un sistema.
+
+### Paso 7. Evaluar costes y límites
+
+Tu informe debe mencionar al menos uno de los siguientes aspectos:
+- almacenamiento ocupado por el índice;
+- mantenimiento ante inserciones y actualizaciones;
+- impacto de cambios en el volumen de datos;
+- diferencia entre consultas selectivas y consultas que devuelven muchos documentos;
+- variabilidad de los tiempos observados.
+
+### Paso 8. Presentación final
+
+Escribe un informe de una página con:
+1. Problema original.
+2. Consulta analizada.
+3. Conjunto de datos.
+4. Índice elegido y justificación.
+5. Evidencia antes/después.
+6. Costes y limitaciones.
+7. Próxima comprobación que harías antes de producción.
+
+Una persona ajena a MongoDB debería entender **por qué el índice importa** sin tener que leer todo el JSON original.
+
+### Solución de ejemplo
+
+«La pantalla busca una venta concreta entre 200.000 registros. Sin un índice secundario por número, la consulta necesitó examinar una gran cantidad de documentos para devolver uno. Después se añadió un índice ascendente único sobre el número. Al repetir el mismo filtro, el plan utilizó el índice y los documentos examinados se redujeron drásticamente. Esta mejora se refiere al trabajo de la consulta medida; los tiempos son específicos del equipo y el índice introduce un coste de almacenamiento y mantenimiento».
+
+**Ese informe sí demuestra comprensión.** Una captura del mensaje `[OK]`, por sí sola, no.
