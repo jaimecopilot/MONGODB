@@ -378,6 +378,214 @@ Si puedes explicar por qué cambian estas respuestas, ya posees el fundamento pa
 
 ---
 
+## 13. ¿Qué protege cada barrera? Un modelo de amenazas sencillo
+
+Antes de decidir una medida de seguridad hay que preguntarse **de qué queremos defendernos**. Esa pregunta se llama análisis de amenazas. No hace falta ser especialista en ciberseguridad para realizar su versión básica.
+
+Consideremos una base de datos de ventas con nombres, direcciones y operaciones comerciales.
+
+- Una persona que comparte nuestra red podría intentar conectar al puerto de la base.
+- Un empleado podría tener una contraseña legítima pero utilizarla para consultar información que no necesita.
+- Un programa de la empresa podría cometer un error e intentar borrar documentos.
+- Un intruso podría obtener una copia de almacenamiento o de una copia de seguridad.
+- Alguien podría copiar un certificado o una contraseña a un repositorio público.
+
+**No hay una sola barrera que resuelva todos estos problemas.** La limitación de red dificulta que ciertos clientes alcancen el servidor; la autenticación comprueba identidades; la autorización limita acciones; TLS protege la comunicación; el cifrado y la custodia de claves se dirigen a otras amenazas.
+
+### La regla de las evidencias separadas
+
+Una prueba de `ping` no demuestra que la información esté protegida. Una conexión TLS no demuestra que una cuenta tenga privilegios mínimos. Un documento cifrado tampoco prueba que existan copias de seguridad utilizables.
+
+Cuando evaluamos seguridad debemos enunciar una propiedad específica y diseñar una prueba que la observe. Por ejemplo: «La cuenta lectora no puede insertar datos en la colección de ventas». Para comprobarla, nos autenticamos con esa cuenta y ejecutamos un `insertOne`, buscando la denegación prevista.
+
+### Pregunta para transferir la idea
+
+La base solo escucha en `127.0.0.1`. ¿Podemos quitar la autenticación porque el puerto es local? No: programas locales o procesos que ya disponen de acceso al equipo podrían intentar conectarse; además, un futuro cambio en la publicación de puertos ampliaría la exposición.
+
+---
+
+## 14. Qué es una URI de conexión y por qué puede fallar
+
+Los clientes de MongoDB suelen recibir los datos de conexión mediante una URI. Una representación sencilla de un servidor local es:
+
+```text
+mongodb://localhost:27018
+```
+
+La cadena incluye el esquema `mongodb://`, un host y un puerto. Sin embargo, en un servidor con autenticación faltan otros datos que pueden aportarse mediante opciones o un mecanismo seguro de configuración.
+
+### Usuario, contraseña y authSource
+
+Un administrador definido en `admin` puede conectarse para operar después con otra base. Si la URI no indica correctamente la base de autenticación, el servidor puede no encontrar su identidad en el lugar esperado.
+
+Ejemplo didáctico de forma —sin contraseña real—:
+
+```text
+mongodb://adminlab@localhost:27018/?authSource=admin
+```
+
+En un programa real se usaría una forma de proporcionar el secreto que no lo exponga en el repositorio. La omisión deliberada de la contraseña en el ejemplo es parte de la enseñanza.
+
+### El error de «estoy en la base equivocada»
+
+En `mongosh`, `use curso_seguridad` selecciona el contexto de operaciones posteriores. **No convierte automáticamente a un usuario autenticado en `admin` en una identidad distinta.** La base de autenticación y la base donde se ejecuta la consulta son conceptos diferentes.
+
+### El error de «el nombre del usuario basta»
+
+Una cuenta llamada `lectorlab` puede estar definida en una base, mientras que otra cuenta del mismo nombre existe en otra base. Para interpretar una conexión debemos pensar en la identidad con su contexto de autenticación, no únicamente en la cadena de caracteres del nombre.
+
+---
+
+## 15. Qué ocurre cuando el permiso cambia mientras la sesión está abierta
+
+Hasta ahora asignamos roles al crear usuarios y comprobamos operaciones. Pero en una empresa los privilegios pueden cambiar: una persona pasa de atención al cliente a otra función, deja el equipo o recibe una responsabilidad temporal.
+
+### Revocar permisos no es solo editar una etiqueta
+
+La política de autorización debe reflejar que algunas acciones dejan de estar permitidas. MongoDB ofrece operaciones administrativas para conceder y revocar roles. Estas operaciones deben ejecutarse por identidades con privilegios suficientes y registrarse según las políticas del entorno.
+
+La pregunta importante no es si el comando «funcionó», sino si **las operaciones efectivas** cambiaron para la cuenta afectada.
+
+### Cómo comprobar un cambio
+
+Un experimento didáctico completo se organiza en tres observaciones:
+
+1. Antes del cambio, confirmar el rol y una operación que está permitida.
+2. Realizar el cambio de roles como administrador.
+3. Reconectar cuando corresponda y repetir la operación para comprobar si su resultado concuerda con la nueva política.
+
+No se debe concluir que una revocación está validada solo porque una orden administrativa devolvió éxito.
+
+### Precaución con cuentas de trabajo
+
+No pruebes revocaciones en la cuenta administrativa del servidor. Utiliza usuarios desechables de laboratorio para no perder capacidad de preparar o recuperar el entorno.
+
+---
+
+## 16. Certificados: sujeto, emisor, validez y clave privada
+
+Un certificado X.509 no es simplemente «un archivo que termina en .crt». Contiene datos estructurados que permiten relacionar una clave pública con cierta información de identidad, bajo una firma.
+
+### Cuatro piezas que conviene reconocer
+
+**Sujeto:** a quién se refiere el certificado. Puede contener un nombre común, una organización u otros atributos. En la autenticación de clientes MongoDB puede utilizar una representación del sujeto como identidad.
+
+**Emisor:** quién firmó el certificado. En un laboratorio puede ser nuestra propia autoridad certificadora de demostración.
+
+**Periodo de validez:** fechas entre las que el certificado está previsto para ser válido. Una firma correcta no resuelve por sí sola el problema de un certificado caducado.
+
+**Clave privada:** material secreto que no debe compartirse. El certificado público y la clave privada cumplen funciones distintas.
+
+### Leer un certificado
+
+En una terminal con OpenSSL:
+
+```bash
+openssl x509 -in certs/client.crt -noout -subject -issuer -dates
+```
+
+El comando muestra atributos, pero no demuestra por sí mismo que MongoDB haya autenticado al cliente. Para eso necesitamos establecer una conexión y verificar los privilegios efectivos de esa identidad.
+
+### No desactivar validación por comodidad
+
+Si el certificado no corresponde al nombre esperado o no se valida contra una CA confiable, eliminar la comprobación puede permitir una conexión, pero también renuncia a una protección importante. La respuesta correcta es diagnosticar la CA, los nombres y las fechas.
+
+---
+
+## 17. Exposición por error: secretos en el repositorio y en los logs
+
+Un fallo frecuente consiste en utilizar contraseñas de laboratorio como si fueran secretos de producción. Los archivos de configuración, las capturas de pantalla y los mensajes de error pueden propagar información confidencial.
+
+### Archivos de ejemplo frente a archivos privados
+
+`.env.example` es una plantilla para indicar qué variables necesita una aplicación. `.env` contiene los valores que se usarán en una instalación concreta. Aunque ambos tengan apariencia similar, **su tratamiento debe ser diferente**.
+
+El archivo privado debe excluirse del control de versiones. Pero también conviene revisar que scripts y logs no impriman su contenido sin necesidad.
+
+### Qué hacer si una contraseña se publicó
+
+Eliminar el texto del archivo visible no invalida una contraseña que alguien pudo copiar. La medida importante es considerarla comprometida y **rotarla**, además de revisar registros de acceso y alcance del incidente conforme al entorno.
+
+### Qué hacer si se publicó una clave privada
+
+Una clave privada de servidor o cliente debe tratarse como secreto comprometido. La sustitución del certificado y las decisiones de revocación dependen de la infraestructura de confianza, no de borrar únicamente la copia visible.
+
+### Aprendizaje para un alumno
+
+En un ejercicio siempre utilizaremos valores ficticios; eso reduce el daño potencial pero no justifica aprender hábitos que pondrían en peligro una instalación real.
+
+---
+
+## 18. Restauración y continuidad: la seguridad también incluye recuperación
+
+Una base puede estar correctamente autenticada y cifrada, pero no ser útil si la empresa pierde sus datos por error, avería o corrupción. La seguridad y la continuidad del servicio se relacionan.
+
+### Preguntas que debe responder una estrategia de copia
+
+- ¿Qué información se copia?
+- ¿Cada cuánto se copia?
+- ¿Quién tiene permiso para leer o restaurar la copia?
+- ¿Cómo se protege el almacenamiento de las copias?
+- ¿Se ha probado que la restauración funciona?
+
+Una copia que nunca se restauró en un entorno de prueba es una promesa, no una recuperación demostrada.
+
+### Qué riesgo persiste con TLS y RBAC
+
+TLS protege el tráfico, y RBAC restringe operaciones por cuenta. Ninguno evita por sí solo que un disco se rompa o que una cuenta autorizada borre datos accidentalmente. Por eso existen medidas de respaldo, procedimientos de recuperación y separación de privilegios.
+
+### Un caso de decisión
+
+Si una cuenta de aplicaciones solo necesita escribir en una colección de pedidos, no debería poder restaurar o borrar la base completa. Son tareas diferentes que deberían asignarse a identidades y procesos distintos.
+
+---
+
+## 19. Cómo explicar una denegación sin recomendar privilegios excesivos
+
+En un laboratorio el alumno recibe «not authorized» e intenta volver a ejecutar el comando como administrador. Esa acción puede hacer desaparecer el error, pero también impedir que entienda el control de acceso.
+
+### Método de análisis
+
+Comienza por identificar la operación: no es lo mismo `findOne` que `insertOne`. Después identifica la identidad: ¿lector, escritor o administrador? Finalmente revisa el alcance del rol.
+
+Ejemplo:
+
+```text
+Cuenta: lectorlab
+Base: curso_seguridad
+Operación: insertOne en secretos
+Rol: read sobre curso_seguridad
+Resultado esperado: denegación
+```
+
+En este escenario **no hay un fallo que arreglar**. Hay una regla que funciona.
+
+### Cuándo un rechazo indica un problema
+
+Si el lector intenta `findOne` sobre una colección que debería poder consultar y recibe una denegación, podría existir un error de rol, base de datos o identidad. Se investiga ese caso como un problema de configuración, no como una invitación a conceder `root`.
+
+### Una frase útil para enseñar
+
+«Una autenticación exitosa no responde qué acciones están permitidas. Para saberlo hay que consultar la autorización en el contexto del recurso concreto».
+
+---
+
+## 20. Elegir una protección exige justificar sus límites
+
+Resuelve estas cuatro situaciones antes de pasar a las prácticas:
+
+**Situación A.** Un servicio publica MongoDB en todas las interfaces de una máquina conectada a una red compartida. ¿Qué capa revisarías primero? La exposición de red, sin olvidar autenticación.
+
+**Situación B.** Un lector puede consultar documentos, pero intenta borrarlos. ¿Qué esperamos? Una denegación de autorización, siempre que su cuenta sea efectivamente de lectura.
+
+**Situación C.** Una conexión TLS se establece correctamente, pero no se permite consultar una colección. ¿Es contradictorio? No: la protección del canal y los privilegios son independientes.
+
+**Situación D.** Una empresa quiere proteger una copia robada del disco del servidor. ¿Basta TLS? No: hay que estudiar protección en reposo y custodia de claves.
+
+No memorices «A = red, B = rol, C = TLS». Explica qué amenaza aborda cada control y qué amenaza **permanece sin resolver** cuando solo se aplica ese control.
+
+---
+
 ## Glosario de seguridad
 
 **Autenticación:** verificación de identidad. **Autorización:** comprobación de privilegios para una acción. **RBAC:** modelo de permisos agrupados por roles. **SCRAM:** mecanismo de desafío/respuesta para autenticación con contraseña. **`authSource`:** base donde se verifica una cuenta. **TLS:** protección de comunicación en tránsito. **X.509:** estándar de certificados que puede emplearse para autenticar clientes. **CA:** autoridad que firma certificados. **LDAP:** protocolo de directorio, con integración autogestionada Enterprise obsoleta en MongoDB 8.0. **Cifrado en reposo:** protección de información almacenada. **Mínimo privilegio:** otorgar solo los permisos necesarios.
