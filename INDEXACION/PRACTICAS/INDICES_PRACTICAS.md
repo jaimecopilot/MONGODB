@@ -635,3 +635,249 @@ Sal de `mongosh` escribiendo `exit`. Resume:
 - por qué ninguna de las dos estructuras sustituye automáticamente a un índice ordenado convencional por número.
 
 **Error habitual:** confundir «hashed» con contraseña cifrada. Un índice hashed organiza claves mediante un cálculo hash; no protege por sí mismo secretos personales.
+
+
+---
+
+# Laboratorio 5 — Impedir duplicados y caducar sesiones: índices unique y TTL
+
+## Dos problemas que no son simplemente «buscar rápido»
+
+La empresa tiene dos necesidades nuevas. Quiere impedir que un mismo correo electrónico aparezca repetido entre las cuentas de un ejercicio, y quiere que ciertos registros de sesión desaparezcan cuando llegue su fecha de caducidad. Son reglas sobre **integridad** y **ciclo de vida de datos**.
+
+No debemos deducir que todo índice se crea solo para acelerar una consulta. Algunos índices también ayudan a aplicar reglas sobre qué datos pueden existir o cuándo deben eliminarse.
+
+### Paso 1. Preparación y consecuencias
+
+Abre PowerShell o Bash en la raíz del repositorio. Si la instancia está detenida, arráncala:
+
+```bash
+docker compose up -d --wait mongo-indices
+```
+
+Este ejercicio utiliza dos colecciones separadas de las ventas principales:
+- `curso_indices.unicidad_demo` para la prueba de duplicados;
+- `curso_indices.sesiones_demo` para probar caducidad.
+
+El script que vas a ejecutar borra y recrea esas dos **colecciones didácticas**. No borra `curso_indices.ventas`. Asegúrate de no haber guardado en ellas datos propios que quieras conservar.
+
+### Paso 2. Entender la regla de unicidad
+
+El correo ficticio `unico@ejemplo.test` debe aparecer una sola vez. Dentro de `mongosh` podríamos crear el índice así:
+
+```javascript
+db.getSiblingDB("curso_indices").unicidad_demo.createIndex(
+  {email:1},
+  {unique:true}
+)
+```
+
+No significa «el campo email es obligatorio para cualquier aplicación». Significa que MongoDB aplicará la semántica de unicidad de ese índice a los documentos de esa colección. Si el campo puede faltar o ser nulo, el diseño requiere reglas adicionales que estudiaremos por separado.
+
+### Paso 3. Ejecutar una prueba que DEBE fallar
+
+En tu terminal, ejecuta:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/06_unique_ttl.js
+```
+
+El script:
+1. Prepara `unicidad_demo`.
+2. Crea un índice único por `email`.
+3. Inserta un documento con correo `unico@ejemplo.test`.
+4. Intenta insertar otro con el mismo correo.
+5. Confirma que MongoDB **rechaza** el segundo intento, en vez de ocultar el error.
+
+Busca el mensaje `E11000` o una confirmación equivalente de que el duplicado fue rechazado.
+
+**Interpretación:** la primera inserción es correcta. La segunda debe fallar porque contradice la regla que definimos. No es una avería del contenedor.
+
+### Paso 4. Explicar la diferencia entre resultado previsto y avería
+
+Anota cuál de estas situaciones demostraría que todo funciona:
+- A) Se insertan ambos correos idénticos y el script termina sin error.
+- B) Se inserta el primero, se rechaza el segundo y el script confirma el rechazo.
+- C) No se inserta ninguno porque la conexión a MongoDB está cortada.
+
+La respuesta es **B**. La situación C no es una prueba de unicidad porque nunca llegamos a comprobar la regla de negocio.
+
+### Paso 5. Preparar TTL
+
+El mismo script crea `sesiones_demo` e introduce dos documentos:
+- uno cuya fecha `expiraEn` ya pasó;
+- otro con una fecha futura.
+
+También crea:
+
+```javascript
+db.getSiblingDB("curso_indices").sesiones_demo.createIndex(
+  {expiraEn:1},
+  {expireAfterSeconds:0}
+)
+```
+
+¿Por qué cero? Porque el campo almacena directamente **la fecha absoluta de caducidad**. El cero no significa que cualquier sesión desaparezca al insertarse; significa que queda elegible para eliminarse cuando se alcanza su fecha de expiración.
+
+### Paso 6. ¿Por qué todavía vemos el registro vencido?
+
+La eliminación no es instantánea: MongoDB utiliza un monitor TTL que funciona periódicamente. Si consultas la colección justo después de crearla y todavía ves el documento vencido, no concluyas inmediatamente que el índice no sirve.
+
+Ejecuta una prueba con margen de espera:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/07_ver_ttl.js
+```
+
+Ese archivo consulta periódicamente la colección y termina con un error si el registro vencido no desaparece dentro del límite previsto para el laboratorio. También verifica que el registro con fecha futura se conserva.
+
+**Resultado esperado:** confirmación de que el vencido desapareció y el vigente permanece. Si no lo consigues, revisa que el servidor esté funcionando y que el campo sea de tipo fecha BSON.
+
+### Paso 7. Comprobar directamente la colección
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").sesiones_demo.find().toArray())'
+```
+
+Deberías ver el documento vigente. Escribe qué campos te permiten concluir que no debería estar caducado.
+
+### Paso 8. Por qué no debemos confiar en TTL para autorizar una sesión
+
+Imagina que la aplicación comprueba «si el documento existe, la sesión está autorizada». Como el monitor puede tardar en eliminarlo, ese razonamiento es incorrecto: un registro puede existir un breve tiempo aunque su fecha ya haya pasado. La aplicación también debe comprobar la expiración cuando concede acceso.
+
+**TTL es un mecanismo de limpieza automática, no una sustitución completa de la lógica de validez de una sesión.**
+
+### Paso 9. Autocomprobación
+
+1. ¿Por qué la segunda inserción duplicada debe producir un error?
+2. Si el documento está caducado a las 10:30, ¿debe desaparecer exactamente a las 10:30:00?
+3. ¿Qué ocurriría si `expiraEn` se almacena como una cadena y no como fecha?
+4. ¿Cuál es la diferencia entre un índice unique y un índice TTL?
+
+---
+
+# Laboratorio 6 — Consultas cubiertas y mantenimiento de índices
+
+## 6.1. Nuestro problema ahora es leer menos información
+
+La empresa solicita una lista muy sencilla: identificadores de cliente e importes de sus ventas. No necesita las descripciones, etiquetas, productos ni información de ubicación.
+
+Hasta ahora buscábamos el documento y después examinábamos si cumplía las condiciones. Un índice adecuado puede permitir responder una consulta pequeña **desde sus propias claves**, sin traer el documento completo.
+
+### Paso 1. Entender la consulta y su proyección
+
+Con la instancia `mongo-indices` en marcha, abre `mongosh`:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de él:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1}
+).limit(3).toArray()
+```
+
+El primer objeto es el **filtro**, el segundo es la **proyección**: especifica los campos que queremos ver. `_id:0` excluye expresamente el identificador, que podría impedir una cobertura si el índice no lo contiene.
+
+### Paso 2. Crear un índice que contenga lo necesario
+
+```javascript
+c.createIndex(
+  {clienteId:1,importe:1},
+  {name:"ix_cubierta_cliente_importe"}
+)
+```
+
+Hemos elegido esos dos campos porque aparecen en el filtro y en la proyección. No hemos añadido la descripción ni las etiquetas porque la consulta no las necesita.
+
+### Paso 3. Observar el coste
+
+```javascript
+const e = c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1}
+).hint("ix_cubierta_cliente_importe")
+ .limit(3)
+ .explain("executionStats");
+printjson({
+  devueltos:e.executionStats.nReturned,
+  documentosExaminados:e.executionStats.totalDocsExamined,
+  clavesExaminadas:e.executionStats.totalKeysExamined
+});
+```
+
+**Resultado esperado para esta consulta diseñada como cubierta:** `documentosExaminados` puede ser cero. No significa que no haya hecho trabajo; ha recorrido claves del índice.
+
+### Paso 4. Romper deliberadamente la cobertura
+
+Ahora pedimos un campo que el índice no contiene:
+
+```javascript
+const otro = c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1,descripcion:1}
+).hint("ix_cubierta_cliente_importe")
+ .limit(3)
+ .explain("executionStats");
+printjson({
+  devueltos:otro.executionStats.nReturned,
+  documentosExaminados:otro.executionStats.totalDocsExamined,
+  clavesExaminadas:otro.executionStats.totalKeysExamined
+});
+```
+
+Compara con el paso anterior. Al pedir `descripcion`, MongoDB puede necesitar recuperar documentos para obtener ese dato. Esa diferencia explica el sentido de `FETCH`.
+
+**No concluyas que añadir todas las columnas al índice sería siempre mejor.** Índices más grandes ocupan espacio y requieren mantenimiento cuando cambian los datos.
+
+### Paso 5. Hacer inventario de índices
+
+```javascript
+c.getIndexes()
+```
+
+Busca nombres, campos y opciones. Un índice puede existir sin que el optimizador lo utilice para la consulta que acabas de ejecutar. Esta lista no sustituye las estadísticas de `explain`.
+
+### Paso 6. Ocultar un índice con intención pedagógica
+
+Prueba a ocultar **solo el índice creado por ti en este laboratorio**:
+
+```javascript
+c.hideIndex("ix_cubierta_cliente_importe")
+```
+
+Si ahora intentas forzar su uso mediante `hint`, el motor puede rechazarlo porque el índice está oculto al planificador. No debemos interpretar eso como que el índice fue eliminado: sigue existiendo y debe mantenerse.
+
+Vuelve a mostrarlo:
+
+```javascript
+c.unhideIndex("ix_cubierta_cliente_importe")
+```
+
+Comprueba con `getIndexes()` que el estado vuelve a ser visible.
+
+### Paso 7. Una retirada controlada
+
+Si has terminado y no vas a reutilizar este índice, puedes eliminar **solo** el que creaste aquí:
+
+```javascript
+c.dropIndex("ix_cubierta_cliente_importe")
+```
+
+Eso reduce el conjunto de índices disponibles, pero en una base real implicaría analizar qué consultas lo utilizan antes de borrar nada. No elimines `ix_numero` o `ix_esr`: siguen siendo parte del recorrido de aprendizaje.
+
+### Paso 8. Tu conclusión
+
+Explica con tus palabras:
+- qué significa una proyección;
+- por qué excluir `_id` puede resultar importante;
+- qué demuestra `totalDocsExamined:0` y qué **no** demuestra;
+- por qué ocultar no es lo mismo que eliminar;
+- qué riesgos introduce acumular índices indiscriminadamente.
+
+**Siguiente desafío:** repetir el experimento de índices simples con un millón de ventas, conservando idéntico filtro y registrando las métricas de ambos volúmenes.
