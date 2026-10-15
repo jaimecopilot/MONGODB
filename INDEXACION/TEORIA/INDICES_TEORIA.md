@@ -1,1673 +1,1213 @@
-# MongoDB 8.0 · INDICES TEORIA
+# Índices de MongoDB 8.0
 
 
-<!-- Hoja didáctica 1, ficha imprimible -->
-## Indexación
-*Teoría del capítulo 4*
+# Antes de estudiar índices: los datos y las consultas que vamos a optimizar
 
-De B-tree y explain a índices compuestos, multikey, texto, geoespaciales, hashed, unique y TTL.
+## 0.1. Por qué hay que empezar por los documentos
 
+Un principiante puede copiar `createIndex` y conseguir que MongoDB responda «OK» sin haber aprendido nada. Para aprender índices primero necesitamos comprender qué estamos buscando, cómo expresamos esa búsqueda y qué significa un resultado correcto.
 
+MongoDB almacena **documentos**. Cada documento tiene campos y valores. Los documentos se reúnen en una **colección**, y las colecciones pertenecen a una **base de datos**. En este curso utilizaremos la base de datos `curso_indices`, cuya colección principal se llama `ventas`.
 
-**Ejemplos del curso:** los comandos se explican para una base de datos de laboratorio preparada con MongoDB Community 8.0. Consulta las prácticas del capítulo para ejecutar el código y comprobar los resultados. Antes de interpretar un ejemplo, revisa qué datos, índices o usuarios requiere.
+Ejemplo de un documento:
+
+```javascript
+{
+  numero: 101,
+  clienteId: 809,
+  estado: "pagada",
+  fecha: ISODate("2025-01-12T00:00:00Z"),
+  importe: 72.50,
+  etiquetas: ["web", "urgente"]
+}
+```
+
+Antes de pensar en índices debemos reconocer que estos campos no son del mismo tipo:
+- `numero` y `clienteId` son valores numéricos.
+- `estado` es texto; las comillas indican una cadena.
+- `fecha` es una fecha representada en el shell mediante `ISODate`.
+- `importe` es un número decimal.
+- `etiquetas` es un array, es decir, una lista de valores.
+
+MongoDB utiliza un formato binario llamado **BSON** que permite almacenar tipos apropiados para documentos. La sintaxis que vemos en `mongosh` se parece a JavaScript, pero no debemos confundir una fecha con la cadena de texto que contiene sus caracteres.
+
+## 0.2. Una base de datos no es una pantalla de la aplicación
+
+Una tienda puede mostrar una tabla con diez ventas, pero la colección de MongoDB puede contener 200.000 documentos. La pantalla está mostrando una pequeña selección de los datos.
+
+Piensa en tres capas:
+1. **Datos almacenados:** las ventas existentes.
+2. **Consulta:** la petición concreta de una aplicación o de una persona.
+3. **Resultado:** los documentos que se entregan al cliente.
+
+Los índices influyen en la manera de obtener el resultado, **no cambian por sí solos lo que la aplicación ha pedido**.
+
+## 0.3. Cómo seleccionar la colección correcta
+
+En `mongosh` podemos establecer una referencia a la colección deseada:
+
+```javascript
+const ventas = db.getSiblingDB("curso_indices").ventas;
+```
+
+A partir de ahí `ventas.find(...)` y `ventas.countDocuments(...)` actuarán sobre esa colección. El nombre es importante. Si consultas una base distinta, podrías obtener cero documentos sin que exista ningún error de indexación.
+
+## 0.4. Buscar por igualdad
+
+```javascript
+ventas.find({ estado: "pagada" })
+```
+
+La orden se lee así: «de la colección de ventas, devuelve los documentos cuyo campo `estado` contiene exactamente el valor `pagada`».
+
+Es distinto de:
+
+```javascript
+ventas.find({ estado: "pendiente" })
+```
+
+Las dos consultas tienen la misma estructura, pero responden preguntas diferentes.
+
+**Pregunta de comprensión:** si una venta está pagada, ¿debería aparecer en una consulta por pendientes? Si respondes que sí porque contiene el campo `estado`, aún no has entendido el significado del filtro.
+
+## 0.5. Comparar valores: mayor, menor e igualdad
+
+Imagina cuatro ventas:
+- A: pagada, importe 720.
+- B: pagada, importe 200.
+- C: pendiente, importe 880.
+- D: cancelada, importe 80.
+
+La consulta:
+
+```javascript
+ventas.find({ importe: { $gt: 500 } })
+```
+
+selecciona ventas con importe superior a 500: A y C.
+
+La consulta:
+
+```javascript
+ventas.find({
+  estado:"pagada",
+  importe:{$gt:500}
+})
+```
+
+añade una segunda condición: solo A cumple simultáneamente el estado y el importe. Esto enseña algo previo a cualquier índice: **la lógica del filtro determina qué significa un resultado correcto**.
+
+Operadores que utilizarás:
+- `$gt`: mayor que.
+- `$gte`: mayor o igual.
+- `$lt`: menor que.
+- `$lte`: menor o igual.
+
+La diferencia entre `$gt:500` y `$gte:500` se nota exactamente en el valor 500. Un índice no corrige una desigualdad mal planteada.
+
+## 0.6. Ordenar no es filtrar
+
+```javascript
+ventas.find({estado:"pagada"}).sort({fecha:-1})
+```
+
+La condición `estado` determina qué documentos entran en el conjunto. `sort` establece en qué orden queremos verlos. El valor `-1` pide fecha descendente, es decir, los más recientes primero.
+
+Si solo necesitamos diez:
+
+```javascript
+ventas.find({estado:"pagada"})
+  .sort({fecha:-1})
+  .limit(10)
+```
+
+No confundas `limit(10)` con «el servidor solo examina diez documentos». Sin un acceso adecuado puede necesitar recorrer muchísimos candidatos antes de entregar diez.
+
+## 0.7. Elegir qué campos recibir: la proyección
+
+```javascript
+ventas.find(
+  {estado:"pagada"},
+  {_id:0,numero:1,importe:1}
+)
+```
+
+El primer objeto sigue siendo el filtro. El segundo indica la **proyección**: queremos ver `numero` e `importe`, pero no `_id`. Esa decisión importa cuando estudiemos consultas cubiertas, porque el índice debe contener lo necesario para responder sin buscar otros campos en cada documento.
+
+## 0.8. Leer frente a escribir
+
+Estas instrucciones hacen cosas radicalmente distintas:
+
+```javascript
+ventas.find({numero:101})
+ventas.insertOne({numero:101,estado:"pagada"})
+ventas.updateOne({numero:101},{$set:{estado:"enviada"}})
+ventas.deleteOne({numero:101})
+```
+
+La primera consulta; la segunda crea un documento; la tercera modifica uno; la cuarta intenta borrarlo. En las prácticas no se ejecutan comandos de modificación como entretenimiento: deben tener una finalidad concreta y utilizar datos ficticios.
+
+Al crear índices únicos, por ejemplo, una inserción duplicada puede ser rechazada. Ese fallo podría demostrar que la integridad está protegida.
+
+## 0.9. Tres preguntas obligatorias antes de utilizar explain
+
+1. ¿Cuál es **la pregunta de negocio** que resuelve la consulta?
+2. ¿El resultado es correcto: contiene los documentos esperados?
+3. ¿Qué trabajo realizó MongoDB para obtenerlo?
+
+La tercera cuestión es donde entra `explain`. Si las dos primeras no están claras, una tabla de `totalDocsExamined` no ayudará a aprender.
+
+### Comprobación inicial
+
+¿Por qué no son equivalentes «devuelve diez ventas» y «examina diez documentos»? ¿Por qué `sort` no implica la creación automática de un índice? ¿Cómo influye una proyección en lo que el cliente recibe?
+
+Si puedes responder estas tres preguntas, estás preparado para comenzar la primera unidad sobre índices.
+## Unidad 1 — Encontrar una venta entre 200.000
+
+### El problema, antes que el comando
+
+Imagina que una empresa guarda 200.000 ventas. Un cliente solicita información sobre la venta número 199.998. El operador necesita localizarla, pero su base de datos no tiene un camino de búsqueda organizado por número. Como en una pila de carpetas desordenadas, el sistema puede verse obligado a examinar documentos sucesivamente. El cliente recibirá una respuesta correcta, pero el esfuerzo puede ser enorme.
+
+Un **índice** es una estructura adicional que MongoDB mantiene ordenada por el valor de uno o varios campos y que permite localizar documentos sin examinar necesariamente toda la colección. No sustituye la colección ni almacena una segunda copia íntegra de cada venta.
+
+### Primer documento de ejemplo
+
+```javascript
+{
+  numero: 199998,
+  clienteId: 809,
+  estado: "pagada",
+  importe: 84.50,
+  fecha: ISODate("2025-07-01T00:00:00Z")
+}
+```
+
+Un documento es una unidad de información. La colección `ventas` agrupa documentos similares. El campo `numero` identifica una venta, mientras `clienteId` identifica a su cliente. Los nombres de campos se escriben exactamente: `numero` no es lo mismo que `número`.
+
+### Buscar no significa examinar solo un documento
+
+```javascript
+db.ventas.find({ numero: 199998 })
+```
+
+El filtro pide las ventas cuyo número sea exactamente 199.998. Aunque reciba un solo resultado, MongoDB puede haber examinado miles de documentos para encontrarlo. **Número de resultados** y **cantidad de trabajo del motor** son conceptos distintos.
+
+Sin un índice útil, el plan puede incluir `COLLSCAN`: recorrer documentos de la colección. Eso no es siempre incorrecto; para una colección diminuta puede ser razonable. Para una búsqueda frecuente en 200.000 registros, conviene comprobar el coste.
+
+### Crear un índice
+
+```javascript
+db.ventas.createIndex({ numero: 1 })
+```
+
+El valor `1` indica orden ascendente de la clave. El `-1` indica descendente. Al crear un índice sobre `numero`, MongoDB dispone de otro camino para localizar una venta. La misma consulta puede pasar a utilizar `IXSCAN`, un recorrido del índice. Si además necesita el documento completo, el plan puede incluir `FETCH`.
+
+**Los índices tienen coste:** ocupan espacio y añaden trabajo a inserciones, actualizaciones y borrados. Por eso no tiene sentido crear índices para todos los campos sin conocer las consultas habituales de la aplicación.
+
+### Cómo saber si sirvió: explain
+
+```javascript
+db.ventas.find({ numero: 199998 }).explain("executionStats")
+```
+
+Esta orden no crea índices. Nos muestra cómo se resuelve la consulta y qué trabajo ha realizado.
+
+| Campo | Qué significa |
+|---|---|
+| `nReturned` | Cuántos documentos devolvió la búsqueda |
+| `totalDocsExamined` | Cuántos documentos examinó el motor |
+| `totalKeysExamined` | Cuántas claves del índice examinó |
+| `executionTimeMillis` | Tiempo observado en esa ejecución, no una promesa de tiempo futuro |
+
+Una consulta sin índice podría examinar casi 200.000 documentos y devolver uno. Con un índice apropiado podría examinar una sola clave y un documento. **No memorices cifras de tiempo:** la CPU, la caché y la carga cambian cada ejecución. Compara primero resultados y contadores de trabajo.
+
+### Qué es una comparación válida
+
+Para comprobar una mejora hay que repetir el mismo filtro, sobre los mismos datos, con la misma proyección y límite. Si antes consultas por número y después por cliente, no puedes atribuir la diferencia al índice.
+
+El laboratorio de la unidad siguiente permite reproducir esta comparación: carga ventas ficticias, observa `COLLSCAN`, crea el índice y repite la búsqueda con `explain`.
+
+### Comprueba que lo has comprendido
+
+1. ¿Por qué una consulta que devuelve un registro puede tener un coste elevado?
+2. ¿Cuál es la diferencia entre `COLLSCAN` e `IXSCAN`?
+3. ¿Qué añade `FETCH` al recorrido de índice?
+4. ¿Por qué no crearías diez índices solo porque puedas?
+5. Si el número de documentos examinados baja de 200.000 a 1, ¿significa que siempre habrá la misma proporción de mejora en milisegundos?
+
+**Respuesta razonada a la primera pregunta:** porque encontrar un resultado puede requerir comprobar muchos candidatos. La consulta puede ser correcta y al mismo tiempo innecesariamente costosa.
+
+### Siguientes unidades
+
+Se desarrollarán de forma independiente los índices compuestos, orden de campos, regla ESR, multikey, búsqueda de texto, geoespaciales, hashed, unique, TTL y mantenimiento. Cada concepto se presentará con un problema reconocible, un ejemplo mínimo, una ejecución guiada y un criterio para decidir cuándo usarlo.
+
+Referencia: https://www.mongodb.com/docs/v8.0/reference/explain-results/
+
 
 ---
 
+# Unidad 2 — Índices compuestos: cuando la pregunta tiene varias condiciones
 
-<!-- Hoja didáctica 2, ficha imprimible -->
-## Itinerario de aprendizaje
-*Del síntoma de lentitud a una decisión de diseño*
+## 1. La situación: no buscamos una venta, buscamos una lista útil
 
-### Qué debe saber hacer el alumno
+En la unidad anterior buscábamos una venta por su número. Ahora la responsable de una tienda nos pide algo diferente:
 
-- Explicar el coste de un escaneo frente a un acceso por índice con evidencia de ejecución.
+> «Enséñame las diez ventas pagadas más recientes cuyo importe sea superior a 500 euros».
 
-- Diseñar índices simples y compuestos, justificar ESR y comprender sus excepciones.
+En una aplicación de verdad, este tipo de consulta es habitual: combina un estado, un umbral económico, una ordenación y un límite. Es más exigente que recuperar una venta por un identificador exacto, porque MongoDB debe resolver **qué documentos interesan** y **en qué orden entregarlos**.
 
-- Distinguir multikey, texto, geoespacial, hashed, unique y TTL sin atribuirles capacidades inexistentes.
+Una venta sintética del laboratorio contiene, entre otros, estos campos:
 
-### Cómo se lee este manual
+```javascript
+{
+  numero: 812,
+  estado: "pagada",
+  fecha: ISODate("2025-03-23T00:00:00Z"),
+  importe: 812.95
+}
+```
 
-Los 38 capítulos cortos son unidades independientes, pero siguen una secuencia que parte del problema, interpreta planes, diseña índices y termina en mantenimiento. Los comandos están enlazados con el cuaderno de prácticas. No es necesario impartir cada página en las tres horas: los apartados avanzados son material autónomo.
+No es importante memorizar ese ejemplo. Lo importante es identificar qué necesitamos pedir: estado igual a «pagada», importe mayor de 500, orden descendente por fecha y máximo diez resultados.
 
-### Una única colección de referencia
+Esta consulta se expresa así:
 
-Trabajaremos con ventas sintéticas: numero, clienteId, estado, fecha, importe, etiquetas, descripcion, idGrupo y ubicacion. La carga básica incorpora 200.000 documentos y puede elevarse a 1.000.000. Los valores son deterministas para facilitar predicciones, pero los tiempos no lo son.
+```javascript
+db.ventas
+  .find({ estado: "pagada", importe: { $gt: 500 } })
+  .sort({ fecha: -1 })
+  .limit(10)
+```
 
-FILTRO → PLAN DE ACCESO → CONTADORES → DECISIÓN
+Léela paso a paso antes de continuar:
 
-### Cómo se demuestra una mejora
+1. `find` selecciona documentos.
+2. `estado: "pagada"` exige igualdad: el estado debe coincidir exactamente.
+3. `importe: { $gt: 500 }` exige **rango**, no igualdad; `$gt` significa *greater than*, «mayor que».
+4. `sort({ fecha: -1 })` quiere los más recientes primero; `-1` significa orden descendente.
+5. `limit(10)` permite entregar como máximo diez documentos.
 
-Conserva el predicado y volumen y compara plan ganador, nReturned, totalKeysExamined y totalDocsExamined. Considera tiempos y coste de mantenimiento como datos complementarios. No supongas que un IXSCAN es siempre mejor ni que una consulta más corta es necesariamente óptima.
+El resultado son diez ventas (si existen al menos diez), pero esa cifra no nos dice cuánto trabajo realizó MongoDB para encontrarlas y ordenarlas.
 
-### Fuentes de referencia
+## 2. Qué es un índice compuesto
 
-MongoDB 8.0: https://www.mongodb.com/docs/v8.0/core/indexes/index-types/
+Un **índice compuesto** utiliza varios campos, en un orden concreto. Por ejemplo:
 
-Explain: https://www.mongodb.com/docs/manual/reference/explain-results/
+```javascript
+db.ventas.createIndex({ estado: 1, fecha: -1 })
+```
 
-TTL: https://www.mongodb.com/docs/manual/core/index-ttl/
+Este índice no es equivalente a tener un índice independiente en `estado` y otro en `fecha`. Es una **única estructura** cuyas claves están organizadas primero por estado y, dentro de cada valor de estado, por fecha descendente.
 
-> Los prefijos compuestos, ESR, el tamaño y mantenimiento de índices, las consultas cubiertas y `explain()` se estudian mediante ejemplos progresivos en la teoría y las prácticas.
+Piensa en un archivador de tarjetas:
+
+- Primero se agrupan las tarjetas por estado: canceladas, enviadas, pagadas, pendientes.
+- Dentro de cada grupo se ordenan de la fecha más reciente a la más antigua.
+- Si pides «pagadas» y las últimas fechas, puedes dirigirte al grupo apropiado y recorrerlo ya ordenado.
+
+Una representación conceptual sería:
+
+```text
+ESTADO       FECHA
+cancelada    2025-12-30
+cancelada    2025-12-28
+...
+pagada       2025-12-31
+pagada       2025-12-30
+pagada       2025-12-29
+...
+pendiente    2025-12-31
+```
+
+Este esquema es una **explicación conceptual**, no un volcado de las páginas internas del índice MongoDB.
+
+### Por qué importa el orden de los campos
+
+Compara estas dos definiciones:
+
+```javascript
+{ estado: 1, fecha: -1 }
+{ fecha: -1, estado: 1 }
+```
+
+Tienen los mismos campos, pero no organizan la información del mismo modo. La primera agrupa por estado y después ordena fechas; la segunda agrupa primero por fecha, independientemente del estado. Eso cambia las consultas que aprovechan mejor el índice.
+
+**Conclusión que conviene recordar:** en un índice compuesto importa **qué campos elegimos, en qué orden se colocan y para qué consultas se utilizarán**.
+
+## 3. El prefijo izquierdo: por qué no vale cualquier combinación
+
+Un índice `{ estado: 1, fecha: -1, importe: 1 }` posee varios prefijos útiles:
+
+- `{ estado: 1 }`
+- `{ estado: 1, fecha: -1 }`
+- La clave completa `{ estado: 1, fecha: -1, importe: 1 }`
+
+¿Por qué llamamos a esto «prefijos»? Porque todas esas combinaciones **comienzan por el primer campo y avanzan hacia la derecha sin saltar posiciones**.
+
+Piensa en una agenda ordenada por «país, ciudad, apellido». Encontrar todas las personas de España resulta natural. Encontrar las de España, Madrid también. Encontrar solamente todas las personas apellidadas García, sin conocer país ni ciudad, ya no aprovecha esa misma organización de la misma forma.
+
+Por tanto, un índice que empieza por `estado` es una buena opción para consultas que filtran por estado, pero **no debemos asumir que es igual de eficiente** al consultar exclusivamente por importe.
+
+Hay matices: MongoDB puede escoger otros planes o incluso recorrer un índice completo en algunos casos. La regla del prefijo no significa «prohibido usarlo» sino «la estructura ordenada no proporciona el mismo acceso selectivo si omites sus primeros campos».
+
+## 4. E, S y R: tres exigencias distintas
+
+La pauta conocida como **ESR** ayuda a decidir el orden de campos en muchos índices compuestos. No es una fórmula mágica. Son iniciales de tres conceptos:
+
+| Letra | Significado | En nuestro ejemplo |
+|---|---|---|
+| **E** | *Equality* (igualdad) | `estado: "pagada"` |
+| **S** | *Sort* (ordenación) | `sort({ fecha: -1 })` |
+| **R** | *Range* (rango) | `importe: { $gt: 500 }` |
+
+Con ese criterio, un índice candidato es:
+
+```javascript
+db.ventas.createIndex(
+  { estado: 1, fecha: -1, importe: 1 },
+  { name: "ix_esr" }
+)
+```
+
+Léelo así: organizamos primero por el estado exacto; dentro de las pagadas podemos recorrer fechas de más reciente a más antigua; y además incorporamos el importe como tercera parte de la clave.
+
+**Cuidado importante:** colocar `importe` después de `fecha` no significa que MongoDB pueda saltar de golpe a todas las ventas superiores a 500 sin inspeccionar otras claves del mismo grupo. Al priorizar la ordenación por fecha, el rango final puede requerir examinar más entradas del índice y filtrar importes. Esa es la contrapartida que hay que medir.
+
+## 5. ¿Y si el rango es más importante que la ordenación?
+
+Podríamos crear el índice en otro orden:
+
+```javascript
+db.ventas.createIndex(
+  { estado: 1, importe: 1, fecha: -1 },
+  { name: "ix_ers_practica" }
+)
+```
+
+Ahora primero agrupamos por estado, y dentro de cada estado ordenamos por importe. Es más fácil localizar directamente importes superiores a un umbral. Pero las fechas quedan organizadas **dentro de cada valor de importe**, no necesariamente de forma global entre todas las ventas que cumplen el rango.
+
+Eso puede obligar al motor a ordenar los resultados con una operación adicional, que en `explain` puede aparecer como una etapa `SORT`. Ordenar no es necesariamente malo, pero consume recursos y, en consultas grandes, puede volverse caro.
+
+Esta variante a veces se llama **ERS**, como contraste con ESR. **No elijas una por su nombre**: piensa si tu consulta necesita recuperar un conjunto pequeño mediante el rango o entregar pocos resultados ya ordenados. El optimizador puede escoger distintos planes según datos, índices disponibles y estadísticas.
+
+## 6. ¿Qué indica realmente una etapa SORT?
+
+Ordenar los documentos es una operación lógica. Un índice adecuado puede suministrarlos en el orden solicitado, y entonces el plan no necesita una etapa de ordenación independiente. En otros casos, MongoDB debe reunir candidatos y ordenarlos antes de entregar los primeros diez.
+
+Una etapa `SORT` no demuestra por sí sola un problema grave. Debemos preguntarnos:
+
+- ¿Cuántos candidatos hay que ordenar?
+- ¿Cuántas claves y documentos se examinan?
+- ¿Hay que recuperar documentos con `FETCH`?
+- ¿De verdad devuelve las diez ventas solicitadas, en orden correcto?
+
+**No compares solo milisegundos**. En un ordenador con caché caliente, una ordenación adicional puede parecer barata; con más volumen o carga, la situación puede cambiar.
+
+## 7. Qué significa comparar ESR y ERS de manera limpia
+
+Para investigar el orden de índices, mantenemos:
+
+1. La **misma colección** y el mismo número de documentos.
+2. El **mismo filtro** por estado e importe.
+3. La **misma ordenación** por fecha.
+4. El **mismo límite** de diez resultados.
+
+Solo variamos el índice utilizado. Para controlar la comparación podemos emplear `hint("ix_esr")` y `hint("ix_ers_practica")`. `hint` le pide al motor que pruebe un índice concreto; aquí sirve como instrumento de aprendizaje, **no como recomendación de forzar siempre planes en producción**.
+
+En las prácticas se prepararán ambos índices, se repetirá la consulta y se comprobará que los resultados son los mismos, aunque el plan y las cantidades examinadas puedan ser diferentes.
+
+## 8. Preguntas para pensar antes de la práctica
+
+**Pregunta A.** Dispones de `{ estado: 1, fecha: -1 }`. ¿Por qué resulta natural filtrar por `estado` y ordenar por `fecha`, pero no necesariamente buscar solo por `fecha`?
+
+**Pregunta B.** ¿Por qué un índice `{ estado: 1, importe: 1, fecha: -1 }` puede ayudar con un filtro de importes, pero aun así necesitar una ordenación adicional por fecha?
+
+**Pregunta C.** Si ambos índices devuelven las mismas diez ventas, ¿cómo decidirías cuál hizo menos trabajo?
+
+**Pregunta D.** ¿Sería justo comparar ESR con diez resultados y ERS con cien? Explica tu razonamiento.
+
+### Respuestas orientativas
+
+- **A:** el primer índice está agrupado por estado, así que sin fijar el primer campo la organización por fecha no equivale a una ordenación global simple.
+- **B:** al recorrer múltiples importes, las fechas se encuentran dentro de bloques con valores diferentes de importe; no forman necesariamente una única secuencia descendente.
+- **C:** observaría claves/documentos examinados, presencia de ordenación y las necesidades de la aplicación, además del tiempo medido en varias ejecuciones.
+- **D:** no; habría cambiado también el trabajo pedido. La comparación debe mantener el mismo filtro, ordenación y límite.
+
+### Puente hacia la práctica
+
+No es necesario memorizar «ESR siempre es mejor». Debes poder defender la elección: **qué campo filtra por igualdad, qué campo ordena, cuál representa un rango, y qué sacrificio aceptas**. El laboratorio siguiente hará visibles estas decisiones.
+
+**Fuente para ampliar:** https://www.mongodb.com/docs/v8.0/tutorial/equality-sort-range-rule/
 
 
 ---
 
+# Unidad 3. Cardinalidad, selectividad y coste: por qué algunos índices ayudan poco
 
-<!-- Hoja didáctica 3, ficha imprimible -->
-## 01. El problema de buscar sin índices
-*Explicación, evidencia y criterio técnico*
+## 3.1. Un problema distinto del número de venta
 
-### Concepto y mecanismo
+El índice por número de venta parecía una elección obvia: un número identifica una sola venta. Ahora el equipo comercial pregunta «¿cuántas ventas están pagadas?». Podríamos pensar que cualquier campo usado en un filtro merece un índice. Pero `estado` solo toma cuatro valores en nuestra colección sintética: `pagada`, `pendiente`, `enviada` y `cancelada`. Cada uno aparece muchas veces.
 
-COLLSCAN examina candidatos recorriendo la colección, aunque la consulta devuelva pocos resultados. La selectividad indica la fracción de filas que supera el filtro.
+Si existen 200.000 documentos distribuidos entre cuatro estados, filtrar uno de ellos podría seleccionar en torno a 50.000 documentos. No es lo mismo que buscar un número que identifica uno solo.
 
-Piensa en el registro de una tienda: pedir una factura por numero no debería obligar a abrir cada carpeta. Si existen 200.000 ventas y el filtro devuelve una, la lectura secuencial puede examinar del orden de 200.000 documentos. Esa desproporción es más informativa que un tiempo aislado. El plan puede incluir otras etapas; hay que mirar el árbol entero. Para obtener una línea de base limpia ejecuta la medición ANTES de crear índices secundarios y conserva el tamaño de la colección. Una vez instalado un índice específico, repite exactamente el mismo filtro, proyección y límite.
+Llamamos **cardinalidad** al número de valores distintos que aparece en un campo. El campo `numero` tiene cardinalidad muy alta: prácticamente cada documento contiene un valor diferente. `estado` tiene cardinalidad baja: se repiten pocos valores. La cardinalidad, sin embargo, **no basta por sí sola para juzgar un índice**. También importa cuántos documentos devuelve una consulta concreta, su ordenación, el límite y si necesita leer otros campos.
 
-### Caso que resuelve
+## 3.2. Selectividad: qué fracción sobrevive al filtro
 
-COLECCIÓN → COLLSCAN → RESULTADO
+Piensa en una criba. Si lanzamos 200.000 ventas y el filtro `numero:199998` deja pasar una, selecciona una fracción diminuta. Si el filtro `estado:"pagada"` deja pasar 50.000, mantiene una cuarta parte.
 
-Una venta concreta entre un millón no debería obligar a leer todo el conjunto. Antes de diseñar índices se enumeran consultas reales, sus filtros, proyecciones y órdenes.
+Al hablar de **selectividad**, nos referimos a lo restrictivo que resulta el filtro. No confundas los conceptos:
 
-### Demostración o comprobación
+- **Cardinalidad** caracteriza los valores posibles del campo en los datos.
+- **Selectividad** caracteriza cuántos documentos deja pasar una condición de búsqueda determinada.
+
+Un campo con pocos valores puede contener uno extraordinariamente raro. Por ejemplo, `estado:"en_revision_legal"` podría existir solo en diez ventas aunque `estado` tenga unos pocos estados en total. Ese valor concreto sí sería muy selectivo.
+
+MongoDB puede decidir que para una consulta de baja selectividad resulta poco ventajoso utilizar cierto índice, especialmente si después debe recuperar gran cantidad de documentos. El optimizador elige un plan entre los disponibles; no está obligado a usar el índice que a nosotros nos parezca más bonito.
+
+## 3.3. ¿Cómo medimos el problema?
+
+Ejecutamos la misma consulta y observamos `explain("executionStats")`:
 
 ```javascript
-db.ventas.find({numero:250001}).explain("executionStats")
+db.ventas.find({ estado: "pagada" }).explain("executionStats")
 ```
 
-### Segunda situación para contrastar
+Lo primero es comprobar `nReturned`. Si devuelve aproximadamente una cuarta parte de toda la colección, el usuario está pidiendo un conjunto grande. Aun con un índice por `estado`, MongoDB deberá hacer trabajo para producir todos esos documentos.
+
+Ahora añadimos una segunda condición:
 
 ```javascript
-db.ventas.find({numero:25001}).limit(1).explain("executionStats")
+db.ventas.find({
+  estado: "pagada",
+  numero: 199998
+}).explain("executionStats")
 ```
 
-La presencia de limit(1) no elimina el recorrido previo de documentos hasta localizar la operación. Compara el número examinado con una consulta por _id y razona qué estructura necesitaría numero.
+Aquí el número reduce el conjunto de candidatos a un máximo de uno. La combinación de filtros y los índices disponibles importan más que el nombre del campo aislado.
 
-### Cómo interpretar el resultado
+**Pregunta diagnóstica:** si quieres devolver 50.000 documentos completos, ¿sería realista esperar `totalDocsExamined=1`? Evidentemente no. Un índice no cambia el hecho de que el cliente ha pedido muchos documentos.
 
-Con solo _id_ disponible, el filtro numero o clienteId no dispone de acceso secundario selectivo; normalmente los documentos examinados se acercarán al tamaño completo.
+## 3.4. Leer resultados y leer candidatos
 
-> **Precaución técnica.** La colección muy pequeña puede rendir mejor con un escaneo; no se indexa por reflejo.
+Es fácil confundir `nReturned` con `totalDocsExamined`. Si una consulta devuelve 10.000 ventas y examina 10.000 documentos, la relación entre ambos números puede ser razonable. Si devuelve una y examina 200.000, merece investigación.
 
-### Comprobación de comprensión
+No interpretes esos contadores con una regla mecánica de «cuanto menor, mejor». Considera también `totalKeysExamined`, el coste de ordenación y el volumen de información retornada.
 
-¿Qué resultado o evidencia confirmaría el caso «Una venta concreta entre un millón no debería obligar a leer todo el conjunto.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
+Para explicar una consulta a otra persona usa este orden:
+1. **Qué necesitaba la aplicación.**
+2. **Qué devolvió MongoDB y si era correcto.**
+3. **Qué camino utilizó el motor.**
+4. **Cuántos candidatos examinó.**
+5. **Qué alternativa medirías y qué costes introduciría.**
+
+## 3.5. El precio invisible de escribir
+
+Imaginemos que la empresa recibe 500 ventas cada segundo. Cada inserción actualiza la colección y los índices que correspondan. Si añadimos decenas de índices por campos apenas consultados, aumentamos el trabajo de escritura, el espacio utilizado y la planificación de mantenimiento.
+
+No hay una respuesta universal como «tres índices por colección». El presupuesto de índices depende del patrón de uso, tamaño de documentos, frecuencia de escritura, memoria disponible y consultas críticas. El buen diseño busca un equilibrio.
+
+**Ejercicio razonado:** una aplicación consulta por `numero` miles de veces al día, por `clienteId` cientos de veces y por `colorDeEtiqueta` una vez al trimestre. ¿Cuál estudiarías primero? La respuesta se apoya en las consultas reales: el índice por número probablemente es prioritario; para el campo raramente consultado primero medirías si merece la pena mantenerlo.
+
+---
+
+# Unidad 4. Índices multikey: buscar dentro de listas
+
+## 4.1. Cuando un campo deja de contener un único valor
+
+Hasta ahora teníamos campos como `estado`, que contiene una cadena, o `importe`, que contiene un número. En la práctica también existen **arrays**: listas de valores dentro de un documento. Una venta puede tener etiquetas como estas:
+
+```javascript
+{
+  numero: 348,
+  etiquetas: ["venta", "web", "urgente"]
+}
+```
+
+La empresa pregunta: «¿Qué ventas contienen la etiqueta `urgente`?». No está preguntando por una cadena completa que represente el array, sino por **la presencia de un elemento dentro de una lista**.
+
+MongoDB permite expresarlo de una forma directa:
+
+```javascript
+db.ventas.find({ etiquetas: "urgente" })
+```
+
+En el conjunto de datos preparado, unas ventas incluyen esa etiqueta y otras no. Como el campo contiene un array, MongoDB puede crear automáticamente un **índice multikey** cuando indexamos dicho campo:
+
+```javascript
+db.ventas.createIndex({ etiquetas: 1 })
+```
+
+No existe una palabra `multikey` dentro del comando: MongoDB reconoce que está indexando valores de arrays.
+
+## 4.2. ¿Qué significa «varias claves»?
+
+Imagina una ficha comercial que contiene tres etiquetas: `venta`, `web` y `urgente`. Para facilitar la búsqueda de cualquier etiqueta, el índice puede representar distintas entradas derivadas de los elementos del array. El documento no se duplica en la colección; lo que crece son las entradas asociadas al índice.
+
+Eso explica dos hechos que a menudo sorprenden:
+- El número de **claves** examinadas puede ser superior al número de **documentos** devueltos.
+- Cambiar el contenido de una lista indexada puede implicar actualizar varias entradas.
+
+No interpretes automáticamente `totalKeysExamined > nReturned` como un error. En un índice multikey es normal que los arrays participen en varias claves.
+
+## 4.3. Dos condiciones en un array: una trampa frecuente
+
+Si un array almacena documentos, por ejemplo:
+
+```javascript
+productos: [
+  { sku: "SKU10", cantidad: 1 },
+  { sku: "SKU20", cantidad: 3 }
+]
+```
+
+podríamos querer encontrar ventas que contengan **un mismo producto** con SKU10 y cantidad 3. Un filtro ingenuo sobre `productos.sku` y `productos.cantidad` puede satisfacer cada condición en elementos diferentes del array. Esto significa que podríamos aceptar la venta aunque SKU10 tenga cantidad 1 y quien tenga cantidad 3 sea SKU20.
+
+Para indicar que las dos condiciones deben cumplirse dentro **del mismo elemento**, MongoDB ofrece `$elemMatch`:
+
+```javascript
+db.ventas.find({
+  productos: {
+    $elemMatch: { sku: "SKU10", cantidad: 3 }
+  }
+})
+```
+
+Antes de crear índices, debemos comprender la semántica de la consulta. **Un índice no puede corregir una pregunta formulada de manera equivocada.**
+
+## 4.4. Limitaciones de los compuestos multikey
+
+MongoDB impone restricciones cuando un índice compuesto incluiría varios campos que son arrays en un mismo documento. La razón es estructural: combinar independientemente listas podría generar demasiadas combinaciones de claves y ambigüedades en la indexación.
+
+No conviertas esto en «los índices multikey no se pueden combinar». Sí se pueden crear índices compuestos que involucren un campo array y otros campos escalares cuando se respetan las restricciones. Lo importante es revisar el esquema real antes de crear uno.
+
+## 4.5. Cómo observar un multikey
+
+En la salida de `explain` de un plan con índice, busca propiedades como `isMultiKey` en los lugares pertinentes del plan, junto a las etapas `IXSCAN`. No dependas de que todas las versiones impriman exactamente el mismo árbol de campos: los detalles del plan pueden cambiar.
+
+Ejercicio de interpretación: si `etiquetas:"urgente"` encuentra 18.000 ventas, ¿es seguro que el índice hará que MongoDB examine solo una clave? No. Podría necesitar recorrer muchas entradas de índice porque `urgente` aparece en muchas ventas.
+
+**Comprobación:** diferencia entre una lista de valores, una lista de subdocumentos y un campo escalar. Explica para qué sirve `$elemMatch` sin usar la expresión «hace más rápido».
+
+---
+
+# Unidad 5. Búsqueda de texto: encontrar palabras, no números exactos
+
+## 5.1. Una consulta que no es igualdad
+
+Una venta puede contener una descripción como `cafe premium en grano`. Si consultas `descripcion:"cafe"`, MongoDB busca un valor completo igual a la cadena `cafe`, no necesariamente un documento cuya descripción contiene esa palabra.
+
+La búsqueda textual plantea un problema distinto: el cliente quiere documentos relacionados con **términos**, no solo cadenas idénticas. Para mostrarlo en el laboratorio tenemos descripciones como `cafe premium en grano`, `bicicleta urbana plegable` o `reclamacion urgente del cliente`.
+
+Un índice textual clásico se define así:
+
+```javascript
+db.ventas.createIndex(
+  { descripcion: "text" },
+  { name: "ix_descripcion_texto", default_language: "spanish" }
+)
+```
+
+La clave `"text"` indica el tipo de índice. La opción de idioma influye en el procesamiento lingüístico. Eso significa que no debemos confundir búsqueda textual con una simple búsqueda de subcadenas de caracteres.
+
+## 5.2. Consultar términos
+
+```javascript
+db.ventas.find({
+  $text: { $search: "cafe" }
+})
+```
+
+El operador `$text` pide búsqueda textual sobre la colección, cuando existe un índice adecuado. No hay que esperar que funcione como una comparación exacta de texto completo.
+
+El sistema puede procesar palabras considerando reglas lingüísticas, como formas y términos frecuentes. Para comprender por qué un resultado aparece y otro no, revisa el idioma y los términos almacenados. Nunca expliques que «busca cualquier secuencia de letras en cualquier lugar»: esa es una descripción equivocada.
+
+## 5.3. Relevancia y textScore
+
+Si muchos documentos contienen términos relacionados, puede interesarnos cuál es más relevante para la búsqueda. MongoDB permite proyectar la puntuación textual:
+
+```javascript
+db.ventas.find(
+  { $text: { $search: "cafe" } },
+  { descripcion: 1, score: { $meta: "textScore" } }
+).sort({ score: { $meta: "textScore" } })
+```
+
+La puntuación ayuda a ordenar coincidencias según el mecanismo textual disponible. **No es una probabilidad de verdad** ni indica la intención real del cliente: representa un cálculo de relevancia para esa consulta.
+
+### Búsqueda textual clásica frente a sistemas de búsqueda más amplios
+
+Los índices `text` de MongoDB Community permiten determinados escenarios de búsqueda de términos. No debes atribuirles automáticamente las capacidades de un motor especializado moderno: analizadores complejos, tolerancia avanzada a errores, búsqueda semántica o ciertas funciones de MongoDB Search son temas diferentes y dependen del producto y despliegue.
+
+## 5.4. Costes y decisiones
+
+Un índice textual consume almacenamiento y añade trabajo de actualización cuando cambian descripciones. Puede ser útil para un buscador sencillo dentro de una colección. Pero si la aplicación necesita un motor de búsqueda muy sofisticado, tendremos que estudiar otras opciones. El ejercicio introductorio pretende comprender la diferencia entre igualdad textual, términos indexados y relevancia, no evaluar todos los motores de búsqueda del mercado.
+
+**Preguntas:** ¿por qué no basta `descripcion:"cafe"` para encontrar `cafe premium`? ¿Qué información aporta `textScore` y qué no puede demostrar?
+
+---
+
+# Unidad 6. Índices geoespaciales: buscar por cercanía
+
+## 6.1. Del catálogo al mapa
+
+Ahora imaginemos una aplicación que muestra puntos de entrega cerca del usuario. Un documento puede almacenar coordenadas geográficas. El reto no consiste en ordenar palabras, sino en responder «¿qué lugares están a menos de cierta distancia de este punto?».
+
+Para datos GeoJSON, un punto se representa así:
+
+```javascript
+{
+  nombre: "Punto A",
+  ubicacion: {
+    type: "Point",
+    coordinates: [-3.7038, 40.4168]
+  }
+}
+```
+
+**Orden decisivo:** las coordenadas son [longitud, latitud]. Invertirlas puede colocar el punto en una región completamente diferente. La longitud es el eje este-oeste y la latitud el eje norte-sur.
+
+## 6.2. Qué aporta 2dsphere
+
+Para trabajar con geometrías GeoJSON sobre una esfera terrestre aproximada, MongoDB ofrece índices `2dsphere`:
+
+```javascript
+db.puntos.createIndex({ ubicacion: "2dsphere" })
+```
+
+Ese índice ayuda a resolver determinadas consultas espaciales, como encontrar puntos cercanos a una coordenada.
+
+```javascript
+db.puntos.find({
+  ubicacion: {
+    $near: {
+      $geometry: {
+        type: "Point",
+        coordinates: [-3.7038, 40.4168]
+      },
+      $maxDistance: 3500
+    }
+  }
+})
+```
+
+El valor `3500` de `$maxDistance` se expresa en metros en esta consulta GeoJSON: solicitamos ubicaciones próximas dentro de aproximadamente 3,5 kilómetros. La cercanía sobre la superficie no equivale a tiempo de viaje por calles y carreteras. Un puente, un río o una montaña pueden alterar el trayecto real.
+
+## 6.3. Qué validar antes de culpar al índice
+
+Si obtienes resultados extraños, primero revisa:
+- El orden longitud/latitud.
+- El tipo GeoJSON `Point` y la estructura `coordinates`.
+- La unidad de la distancia.
+- La existencia del índice `2dsphere`.
+- Si los puntos ficticios representan coordenadas realistas para el caso estudiado.
+
+No confundas índices `2d` para coordenadas planas con los `2dsphere` para ubicaciones geográficas. El tipo de dato y la consulta deben corresponderse con el modelo espacial elegido.
+
+## 6.4. Decisiones de diseño
+
+Una empresa de mensajería podría indexar la ubicación de sus centros de distribución para buscar el más cercano a un cliente. Eso no resuelve automáticamente la ruta óptima de reparto. El índice contesta consultas espaciales sobre los datos almacenados; optimizar recorridos con múltiples paradas y restricciones es otro problema.
+
+**Pregunta de transferencia:** ¿qué fallaría si una aplicación intercambia latitud y longitud? ¿Por qué un punto situado a 2 kilómetros en línea recta no garantiza un trayecto de 2 kilómetros?
 
 
 ---
 
+# Unidad 7. Índices hashed: igualdad y distribución de valores
 
-<!-- Hoja didáctica 4, ficha imprimible -->
-## 02. Qué guarda un índice B-tree
-*Explicación, evidencia y criterio técnico*
+## 7.1. ¿Por qué una representación hash?
 
-### Concepto y mecanismo
+Un índice tradicional sobre un número lo organiza según su valor. Si buscamos entre 500 y 900, la ordenación numérica facilita localizar ese intervalo. Pero hay sistemas donde el requisito dominante no es recorrer valores cercanos, sino encontrar por igualdad y ayudar a distribuir las claves de forma más uniforme.
 
-Un índice ordena claves y referencias a documentos; no es una copia íntegra de cada documento. Las claves mantienen un orden aprovechable para igualdad, rangos y ciertas ordenaciones.
+Un índice `hashed` almacena una representación hash del valor indexado. En términos intuitivos, una función hash transforma un valor en otro valor calculado de forma determinista. Si aplicamos la función al mismo dato, obtenemos el mismo resultado; valores próximos en el espacio original no tienen por qué quedar próximos en el espacio transformado.
 
-La estructura del índice mantiene pares ordenados de clave y localizador; cuando hay claves repetidas, las entradas comparten tramos vecinos. El motor navega hasta la primera coincidencia y recorre las siguientes sin inspeccionar documentos de otros clientes. Eso no significa que guarde toda la venta: para recuperar importe, fecha y descripcion puede necesitar un FETCH adicional. Dibujar el árbol como directorio de accesos es válido; dibujarlo como una copia completa de la colección no lo es.
-
-### Caso que resuelve
-
-CLAVE → B-TREE → DOCUMENTO
-
-En {clienteId:1}, las entradas del mismo cliente quedan próximas. El beneficio aparece al evitar leer documentos no relevantes.
-
-### Demostración o comprobación
+En el laboratorio existe el campo `idGrupo`, que identifica uno entre muchos grupos sintéticos:
 
 ```javascript
-db.ventas.createIndex({clienteId:1},{name:"ix_cliente"})
+db.ventas.createIndex({ idGrupo: "hashed" })
 ```
 
-### Segunda situación para contrastar
+La consulta típica es una igualdad:
 
 ```javascript
-db.ventas.find({clienteId:809},{_id:0,clienteId:1}).explain("executionStats")
+db.ventas.find({ idGrupo: 809 })
 ```
 
-No hace falta devolver todos los campos de la venta. Con el índice de cliente y una proyección compatible se puede reducir la lectura de documentos; la estructura ordenada separa localizar claves y obtener documentos.
+El sistema calcula el hash del valor buscado y puede utilizar el índice para encontrar candidatos adecuados.
 
-### Cómo interpretar el resultado
+## 7.2. Qué no debes pedirle a un hash
 
-La creación modifica el catálogo de índices, no la forma lógica de los documentos. Las operaciones de igualdad recorren claves contiguas y recuperan solo candidatos.
+La idea de hash rompe la correspondencia con el orden original. Los valores `500`, `501` y `502` no tienen por qué aparecer juntos en el índice hashed. Por ello, **no es una estructura diseñada para acelerar rangos numéricos** como «grupos entre 500 y 900».
 
-> **Precaución técnica.** El índice ocupa memoria y disco y aumenta trabajo de inserción.
+```javascript
+db.ventas.find({ idGrupo: { $gte: 500, $lte: 900 } })
+```
 
-### Comprobación de comprensión
+Este filtro puede ser perfectamente válido como consulta, pero no debes suponer que el índice hashed es el acceso adecuado para resolver su intervalo. La propiedad que estamos aprovechando es igualdad, no ordenación.
 
-¿Qué resultado o evidencia confirmaría el caso «En {clienteId:1}, las entradas del mismo cliente quedan próximas.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
+## 7.3. No confundir hash de índice con cifrado de contraseñas
 
+Que un índice utilice la palabra *hashed* no significa que los datos de la base estén cifrados, ni que podamos almacenar contraseñas en claro y confiar en el índice. Son problemas completamente distintos.
+
+Una función hash usada para organizar claves no es un mecanismo de protección de secretos. El propósito aquí es la representación de valores para determinadas operaciones de acceso y distribución.
+
+**Pregunta:** ¿utilizarías `{ idGrupo:"hashed" }` para mostrar los grupos ordenados de menor a mayor? Explica por qué un índice ordenado convencional encaja mejor con esa tarea.
 
 ---
 
+# Unidad 8. Índices únicos y parciales: la integridad también se diseña
 
-<!-- Hoja didáctica 5, ficha imprimible -->
-## 03. Selectividad y cardinalidad
-*Explicación, evidencia y criterio técnico*
+## 8.1. Una pregunta distinta a la rapidez
 
-### Concepto y mecanismo
+Supón que cada empleado debe tener una dirección de correo distinta. Un índice que permita localizar cuentas por correo será útil para acceder rápidamente. Pero la empresa exige algo más: **no permitir que se creen dos cuentas con el mismo correo**.
 
-Cardinalidad es el número de valores distintos; selectividad describe cuán discriminante es un predicado. Una columna de cuatro estados suele filtrar peor que un número de operación único.
-
-En el generador, estado tiene cuatro valores y clienteId recorre 20.000 valores. Para 200.000 ventas caben aproximadamente 50.000 documentos en el primer filtro y diez en el segundo, porque la distribución es determinista. Un índice sobre estado no es necesariamente inútil: puede aportar la ordenación de una consulta compuesta o reducir el trabajo si solo se proyectan campos indexados. Para elegir, compara consultas reales, no etiquetas simplistas como «alta cardinalidad = bueno».
-
-### Caso que resuelve
-
-estado="pagada" puede coincidir con un cuarto de la colección. Se priorizan accesos frecuentes y selectivos, sin concluir que toda baja cardinalidad sea inútil.
-
-### Demostración o comprobación
+Eso es una regla de integridad. MongoDB puede imponerla con un índice único:
 
 ```javascript
-db.ventas.distinct("estado")
+db.alumnos.createIndex({ email: 1 }, { unique: true })
 ```
 
-### Segunda situación para contrastar
+Si insertas dos documentos con `email:"ana@ejemplo.test"`, el segundo intento debe fallar por clave duplicada, normalmente con el código `E11000`.
+
+**El fallo es el resultado esperado.** No hay que interpretar que MongoDB «no sabe insertar». Está rechazando datos que violan una regla declarada por nosotros.
+
+## 8.2. Crear una restricción sobre datos que ya existen
+
+¿Qué ocurre si la colección ya contiene correos repetidos y después intentamos crear un índice único? MongoDB no puede imponer limpiamente esa restricción sin resolver antes los duplicados existentes: la construcción del índice puede fallar.
+
+El orden correcto de implantación en una base real incluye:
+1. Identificar qué campo se considera único y bajo qué reglas.
+2. Buscar documentos duplicados o valores ausentes.
+3. Resolver esos conflictos de acuerdo con el negocio.
+4. Crear la restricción.
+5. Probar tanto una inserción válida como una duplicada.
+
+No borres datos reales para conseguir que pase el comando. Las reglas de unicidad son decisiones de negocio, no simples ajustes de rendimiento.
+
+## 8.3. ¿Qué ocurre con valores que faltan?
+
+Una complicación importante aparece si algunas cuentas aún no tienen correo electrónico. Un índice único de un solo campo trata de forma especial los documentos que no contienen ese campo o contienen `null`. Puede impedir crear múltiples documentos sin correo bajo determinadas configuraciones.
+
+Por eso no deberíamos decidir «índice único en email» sin preguntarnos si el campo es obligatorio para todos, opcional para algunos o si solo debe ser único cuando realmente contiene un valor.
+
+## 8.4. Índices parciales: solo ciertos documentos
+
+Una empresa quiere una clave única para los **cupones activos**, pero quizá permite reutilizar códigos de promociones históricas inactivas. Podemos estudiar un índice parcial que solo se aplique a documentos que cumplan un filtro:
 
 ```javascript
-db.ventas.countDocuments({estado:"pagada"})
-db.ventas.countDocuments({clienteId:809})
+db.cupones.createIndex(
+  { codigo: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { activo: true }
+  }
+)
 ```
 
-La diferencia de órdenes de magnitud entre las dos cuentas muestra qué predicado discrimina más. Repite con un volumen distinto: las proporciones siguen siendo sintéticas y no describen necesariamente una empresa.
+La intención es exigir unicidad de `codigo` entre los documentos donde `activo` sea verdadero. Al diseñarlo debemos pensar qué significa un documento sin `activo` y qué ocurrirá cuando un cupón pase de inactivo a activo.
 
-### Cómo interpretar el resultado
+Por ejemplo:
+- Cupón A, código `PROMO7`, activo: verdadero.
+- Cupón B, código `PROMO7`, activo: falso.
+- Intento de activar B mientras A sigue activo.
 
-Con estado de cuatro valores puede ser razonable un escaneo extenso; con numero casi único, leer un tramo corto tiene una ventaja más clara.
+Ese último cambio debe analizarse como una posible violación de la restricción. El índice no solo interviene al insertar: también importa cuando actualizamos un documento de manera que entra en el conjunto indexado.
 
-> **Precaución técnica.** El conjunto de filtros y la ordenación cambian la utilidad efectiva.
+## 8.5. Índice parcial no es índice sparse
 
-### Comprobación de comprensión
+Ambos pueden almacenar únicamente una parte de los documentos, pero **no son equivalentes**. Un índice parcial utiliza una expresión declarada para delimitar qué documentos se incluyen; uno sparse tiene reglas específicas relacionadas con la presencia de campos. No uses las palabras como sinónimos al documentar una arquitectura.
 
-¿Qué resultado o evidencia confirmaría el caso «estado="pagada" puede coincidir con un cuarto de la colección.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
+**Pregunta razonada:** si las promociones deben ser únicas solo mientras están activas, ¿por qué un índice único general sobre `codigo` podría ser demasiado restrictivo? ¿Qué riesgo aparece cuando se reactiva un cupón?
 
 ---
 
+# Unidad 9. TTL: datos que deben caducar solos
 
-<!-- Hoja didáctica 6, ficha imprimible -->
-## 04. Costes de lectura y escritura
-*Explicación, evidencia y criterio técnico*
+## 9.1. El problema de las sesiones olvidadas
 
-### Concepto y mecanismo
+Imagina una aplicación que almacena documentos temporales para una sesión de usuario. Pasados ciertos minutos, esos datos ya no deberían conservarse. Podríamos programar una tarea externa que buscara registros antiguos y los borrara. MongoDB ofrece otra posibilidad: un índice **TTL**, de *time to live*, asociado a un campo de fecha.
 
-Cada índice mejora potencialmente lecturas pero exige mantener entradas en insert, update y delete. Conviene medir en la misma carga de trabajo.
+En una colección `sesiones` cada documento podría contener:
 
-No basta con celebrar que la búsqueda bajó de miles de documentos a unas decenas. En el otro lado, cada inserción modifica tantas estructuras auxiliares como correspondan. Si se actualiza un campo indexado, también habrá cambios en las entradas. Un sistema orientado a ingestión masiva y uno orientado a búsquedas interactivas necesitan estrategias diferentes. Al medir, realiza primero una carga controlada sin índices y después el mismo tamaño en una colección equivalente con índices, evitando concluir por una sola ejecución.
+```javascript
+{
+  _id: "sesion-7",
+  usuario: "alumno-1",
+  expiraEn: ISODate("2025-11-01T10:00:00Z")
+}
+```
 
-### Caso que resuelve
+Si `expiraEn` representa el instante absoluto en que deja de ser válida, creamos:
 
-Una aplicación que inserta miles de ventas cada segundo paga por cada índice agregado. Diseñar el mínimo conjunto de índices que cubra consultas prioritarias.
+```javascript
+db.sesiones.createIndex(
+  { expiraEn: 1 },
+  { expireAfterSeconds: 0 }
+)
+```
 
-### Demostración o comprobación
+El valor cero indica que, una vez alcanzado el instante almacenado en el campo, el documento resulta elegible para la eliminación TTL.
+
+## 9.2. Caducar no equivale a desaparecer en ese milisegundo
+
+MongoDB ejecuta la eliminación TTL mediante un monitor periódico y asíncrono. **Un documento caducado puede permanecer un tiempo después de su fecha de expiración.** No construyas un sistema de autorización suponiendo que «si el documento existe es porque su sesión sigue vigente».
+
+La aplicación debe comprobar la validez temporal cuando toma decisiones sensibles. El TTL ayuda a limpiar datos, no sustituye toda la lógica de seguridad y expiración.
+
+En nuestro laboratorio, el parámetro de monitor TTL se acelera para hacer razonable la comprobación. Esa elección es específica de la demostración; no presupone la misma frecuencia en todos los servidores.
+
+## 9.3. ¿Por qué es crucial usar una fecha?
+
+Un campo como `"2025-11-01"` almacenado literalmente como cadena no representa el mismo tipo que una fecha BSON. Los índices TTL necesitan valores temporales adecuados para sus reglas de expiración. Si el documento usa un campo ausente o un tipo que no se considera fecha válida para TTL, no podemos esperar que el monitor lo trate igual.
+
+Para comprobarlo en el laboratorio:
+1. Insertamos un documento con una fecha ya vencida.
+2. Insertamos otro con una fecha futura.
+3. Observamos si el monitor elimina el primero.
+4. Confirmamos que el segundo permanece.
+
+La prueba debe contemplar un margen de espera. **No concluyas que TTL está roto porque el documento no desaparezca al instante.**
+
+## 9.4. Un error de modelado: confundir creación y expiración
+
+Hay dos formas habituales de pensar la caducidad:
+
+- Guardar **cuándo fue creado** y definir cuántos segundos debe durar.
+- Guardar **cuándo debe expirar** e indexarlo con `expireAfterSeconds:0`.
+
+No mezcles ambas ideas sin analizarlo. Si almacenas la fecha de creación y usas cero, estarás declarando que el documento está caducado desde que nace. Si almacenas una fecha futura y le añades un intervalo no deseado, lo borrarás más tarde de lo previsto.
+
+**Ejercicio conceptual:** una sesión creada a las 10:00 debe expirar a las 10:30. Diseña el campo temporal y el índice de las dos estrategias. Después explica por qué el monitor no garantiza eliminarla exactamente a las 10:30:00.
+
+---
+
+# Unidad 10. Consultas cubiertas, proyecciones y FETCH
+
+## 10.1. Hasta ahora recuperábamos documentos completos
+
+A veces una aplicación no necesita un documento entero. Supón que muestra una lista de clientes y sus importes, sin detalles de entrega ni descripciones largas. Si el índice contiene todas las claves solicitadas y el filtro puede resolverse desde él, MongoDB podría obtener los resultados **sin recuperar los documentos completos**.
+
+A eso se le llama consulta **cubierta** por el índice, bajo las condiciones correspondientes.
+
+Imagina un índice:
+
+```javascript
+db.ventas.createIndex({ clienteId: 1, importe: 1 })
+```
+
+La consulta solo pide esos dos campos:
+
+```javascript
+db.ventas.find(
+  { clienteId: 809 },
+  { _id: 0, clienteId: 1, importe: 1 }
+)
+```
+
+La proyección es el segundo objeto que pasamos a `find`. `_id:0` excluye expresamente el identificador `_id`, que MongoDB incluye por defecto en muchos resultados. Si no lo excluyéramos y el índice no contuviera `_id`, la cobertura completa de esta consulta podría verse impedida.
+
+## 10.2. Qué observar en explain
+
+Si una consulta está realmente cubierta, los contadores pueden mostrar `totalDocsExamined:0`: el motor obtiene los datos de las entradas de índice sin recuperar documentos de la colección.
+
+Ese cero es **muy significativo**, pero no significa que el trabajo sea gratuito. El motor sigue recorriendo claves, procesando filtros y devolviendo resultados. Para entenderlo también miramos `totalKeysExamined`.
+
+Añadir un campo a la proyección cambia las necesidades. Si de pronto pedimos `descripcion` y el índice solo contiene cliente e importe, probablemente será necesario recuperar los documentos para conocer la descripción.
+
+## 10.3. Cubrir todas las consultas puede ser mala idea
+
+Podríamos sentir la tentación de añadir muchos campos a los índices para que más consultas queden cubiertas. Eso aumenta el tamaño de los índices y el coste de mantenerlos. Además, una consulta con arrays y multikey puede tener reglas adicionales que impidan ciertas coberturas.
+
+El diseño correcto considera la frecuencia de uso de la consulta, su proyección real, la cantidad de resultados y el coste de escritura. No se trata de ganar un concurso de índices enormes.
+
+**Pregunta:** ¿por qué una consulta puede examinar cero documentos y, sin embargo, examinar 500 claves? ¿Qué cambiaría al pedir el campo `descripcion`?
+
+---
+
+# Unidad 11. Mantener índices y decidir cuáles merece la pena conservar
+
+## 11.1. Saber qué índices existen
+
+Antes de proponer uno nuevo, comprueba el inventario de la colección:
 
 ```javascript
 db.ventas.getIndexes()
 ```
 
-### Segunda situación para contrastar
+Esta orden muestra definiciones de índices, nombres y propiedades. No te dice por sí sola si cada índice resulta valioso ni cuánto acelera cada consulta. Esa conclusión exige observar cargas y consultas reales.
 
-```javascript
-db.ventas.getIndexes().map(x=>({name:x.name,key:x.key}))
-```
+Puedes encontrar, por ejemplo, un índice compuesto cuyo prefijo es muy parecido a otro índice simple. En determinadas condiciones el compuesto puede atender consultas que antes usaban el simple, pero antes de eliminarlo hay que analizar diferencias como unicidad, opciones y cargas específicas.
 
-Enumera índices antes de medir el coste de inserción. Un resultado rápido de find no informa sobre el impacto de crear cinco estructuras adicionales en la tasa de escrituras.
+## 11.2. Índices ocultos: ensayar una retirada
 
-### Cómo interpretar el resultado
-
-Un INSERT debe actualizar tantas estructuras como índices corresponda; medir solo una consulta de lectura oculta este coste.
-
-> **Precaución técnica.** No prometer aceleración de escritura tras crear índices adicionales.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Una aplicación que inserta miles de ventas cada segundo paga por cada índice agregado.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 7, ficha imprimible -->
-## 05. Crear un índice simple
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice simple incluye un solo campo. Es una puerta de entrada excelente para enseñar búsquedas por igualdad y diferencias con COLLSCAN.
-
-La clave clienteId identifica a un comprador, no una venta. En 200.000 filas sintéticas cada comprador aparece unas diez veces; por ello no debe crearse como unique. Tras crear ix_cliente, una búsqueda por clienteId debería inspeccionar una fracción pequeña, aunque siga leyendo documentos para devolver el resto de campos. Verifica además que el índice aparece con el nombre correcto en getIndexes() y que se utiliza con el filtro planteado, no con un filtro ajeno.
-
-### Caso que resuelve
-
-Encontrar todas las ventas de clienteId 809. Comparar documentos examinados antes y después; repetir la consulta idéntica.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({clienteId:1},{name:"ix_cliente"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).limit(5).explain("executionStats")
-```
-
-No uses una query por fecha para comprobar un índice que solo contiene clienteId. Debe existir correspondencia exacta entre la clave creada y los predicados que quieres estudiar.
-
-### Cómo interpretar el resultado
-
-Tras crear ix_cliente, el filtro por clienteId debería reducir notablemente totalDocsExamined; el índice no cubre campos de proyección ajenos a su clave.
-
-> **Precaución técnica.** La consulta debe seleccionar suficientes datos para mostrar diferencia observable.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Encontrar todas las ventas de clienteId 809.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 8, ficha imprimible -->
-## 06. Índices ascendente y descendente
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-En un índice simple MongoDB puede recorrer ambas direcciones. En índices compuestos la combinación de direcciones sí afecta a ciertas ordenaciones.
-
-Para una sola clave, MongoDB puede recorrer el mismo árbol hacia delante o atrás. Crear simultáneamente {fecha:1} y {fecha:-1} no suele aportar dos capacidades diferentes. Con varias claves sí existe una restricción sobre el patrón completo de la ordenación: el motor puede recorrer el índice en su dirección o en la dirección inversa total, pero no invertir arbitrariamente cada columna. Pide al alumno que compare ordenación de cliente y fecha, no únicamente fechas aisladas.
-
-### Caso que resuelve
-
-Listar fechas descendentes dentro de un mismo cliente. Escoger orientación del compuesto a partir de sorts de la carga real.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({fecha:-1},{name:"ix_fecha_desc"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find().sort({fecha:1}).limit(5).explain("queryPlanner")
-```
-
-Si hay un índice simple en fecha, puede recorrerse en sentido ascendente o descendente. A continuación compara el caso de dos campos, donde las combinaciones no son arbitrarias.
-
-### Cómo interpretar el resultado
-
-Un índice simple puede recorrerse en orden inverso; su orientación aislada no suele justificar mantener dos índices redundantes.
-
-> **Precaución técnica.** No crear {campo:1} y {campo:-1} sin justificar el coste.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Listar fechas descendentes dentro de un mismo cliente.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 9, ficha imprimible -->
-## 07. El índice de _id
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-MongoDB crea automáticamente un índice único por _id en colecciones ordinarias. Es parte de la identidad de cada documento.
-
-Cada colección normal contiene un índice único sobre _id que soporta las búsquedas por identificador del documento. El campo numero no se convierte en _id automáticamente: aunque represente una clave de negocio, es otro camino de acceso. El nombre de la clave funcional importa también por integridad: si numero debe ser irrepetible, un índice unique en numero representa una regla distinta. No elimines ni modifiques _id para demostrar la diferencia.
-
-### Caso que resuelve
-
-getById de una operación administrativa. Aprovechar _id para lecturas y actualizaciones identificadas.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.getIndexes().filter(x=>x.name==="_id_")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.findOne({_id:db.ventas.findOne()._id})
-```
-
-El acceso por _id sirve para identificar un documento; numero es una propiedad distinta. Si la aplicación recibe codigo de negocio, necesitará elegir una clave de acceso apropiada.
-
-### Cómo interpretar el resultado
-
-getIndexes debe contener _id_ con unique; verificar que buscar por numero carece de privilegio automático por el mero parecido semántico.
-
-> **Precaución técnica.** Un índice de _id no resuelve búsquedas por otros campos.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «getById de una operación administrativa.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 10, ficha imprimible -->
-## 08. Compuestos: el prefijo
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice compuesto admite eficientemente consultas por su prefijo inicial. El índice {clienteId,fecha} puede apoyar {clienteId}, pero no ofrece igual acceso a {fecha} aislada.
-
-Considera el compuesto {clienteId:1,fecha:-1}: primero agrupa ventas por comprador y solo dentro de cada comprador ordena por fecha reciente. El índice facilita tanto la igualdad por comprador como una consulta que añada fecha, pero no dispone de una ordenación global por fecha que prescinda de clienteId. Es la regla de prefijo: para seleccionar entradas con eficiencia se necesita comenzar por la primera parte de la clave. Distínguela del simple hecho de que una consulta pueda forzar un recorrido de ese índice.
-
-### Caso que resuelve
-
-CLIENTE → FECHA → PREFIJO
-
-Buscador por cliente y después intervalos de fecha. Ordenar campos atendiendo a patrones de consulta, no al alfabeto.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({clienteId:1,fecha:-1})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({fecha:{$gte:ISODate("2025-01-01")}}).limit(10).explain("executionStats")
-```
-
-La condición anterior no contiene clienteId. Tener fecha como segundo elemento de una clave compuesta no equivale a poseer un índice global que comienza por fecha.
-
-### Cómo interpretar el resultado
-
-El prefijo clienteId delimita la región útil del índice; una consulta solo por fecha no aprovecha el mismo prefijo delimitador.
-
-> **Precaución técnica.** La utilidad depende también del plan, de la ordenación y de la selectividad.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Buscador por cliente y después intervalos de fecha.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 11, ficha imprimible -->
-## 09. Compuestos: orden de campos
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Dos índices con los mismos campos en distinto orden no son intercambiables. Su estructura ordenada induce accesos diferentes.
-
-En {estado:1,fecha:-1}, buscar pagadas del último mes delimita primero un conjunto por estado; en {fecha:-1,estado:1}, pedir «ventas recientes» puede resultar más directo sin filtrar por estado. Son índices distintos con costes diferentes. No deduzcas el orden óptimo de los campos solamente de su cardinalidad: una ordenación solicitada, un limit y la frecuencia del patrón pueden cambiar la decisión. Trabaja con dos consultas: «pagadas recientes» y «recientes de cualquier estado».
-
-### Caso que resuelve
-
-Comparar {estado,fecha} frente a {fecha,estado}. Planificar prefijos de igualdad y sorts relevantes.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({estado:1,fecha:-1},{name:"ix_estado_fecha"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({estado:"pagada"}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-Este patrón favorece {estado:1,fecha:-1}. Ahora elimina el estado del filtro y observa si la ordenación se sigue resolviendo sin SORT: es otro contrato de consulta.
-
-### Cómo interpretar el resultado
-
-La pareja estado-fecha prioriza consultas por estado y tiempo; fecha-estado prioriza otros accesos y no garantiza ordenación equivalente.
-
-> **Precaución técnica.** No duplicar ambos si las consultas no lo justifican.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Comparar {estado,fecha} frente a {fecha,estado}.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 12, ficha imprimible -->
-## 10. Estrategia ESR
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-ESR recomienda colocar Equalities, después Sort y después Range en muchos índices compuestos. No es una ley universal: la selectividad de rangos puede justificar ERS.
-
-ESR significa Igualdad, Sort, Rango. La clave {estado:1,fecha:-1,importe:1} puede satisfacer estado=pagada, producir fechas ordenadas y evaluar importe. Pero si importe>=890 deja muy pocos resultados, situar importe antes de fecha puede leer muchas menos claves aun a costa de una fase SORT. Ese es el motivo por el que ESR es un punto de partida y no un dogma. El informe debe mostrar keysExamined, docsExamined y la presencia de SORT.
-
-### Caso que resuelve
-
-EQUALITY → SORT → RANGE
-
-Estado pagada + ordenar fecha + importe mayor de 600. Verificar la estrategia con explain, no con intuición.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({estado:1,fecha:-1,importe:1},{name:"ix_esr"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({estado:"pagada",importe:{$gte:890}}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-Con rango muy selectivo, una clave estado-importe-fecha puede encontrar pocos registros; con estado-fecha-importe se preserva otra ventaja. La respuesta depende de las estadísticas y de cuántos resultados quieres devolver.
-
-### Cómo interpretar el resultado
-
-Si fecha satisface sort y importe es rango posterior, es posible ahorrar SORT aunque se examinen más claves; un ERS selectivo puede resultar mejor.
-
-> **Precaución técnica.** La presencia de varios rangos, sorts o filtros modifica el resultado.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Estado pagada + ordenar fecha + importe mayor de 600.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 13, ficha imprimible -->
-## 11. Igualdad y ordenación
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Las igualdades en un prefijo delimitan un tramo y las siguientes claves pueden proveer orden sin SORT en memoria.
-
-La igualdad en clienteId convierte un orden compuesto {clienteId:1,fecha:-1} en una secuencia cronológica ya utilizable. Sin igualdad, las fechas estarían ordenadas dentro de muchos grupos de clientes y una solicitud global de últimas ventas no disfrutaría del mismo orden. Añadir limit(10) permite detener el recorrido cuando hay suficiente información, pero no transforma un índice inadecuado en adecuado. Comprueba el sortPattern y las etapas del plan según el motor.
-
-### Caso que resuelve
-
-Filtrar por cliente y ordenar por fecha descendente. Observar si el plan introduce SORT o utiliza el orden del índice.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).sort({fecha:-1}).limit(15)
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).sort({fecha:1}).limit(5).explain("queryPlanner")
-```
-
-La inversión total de recorrido sobre un índice cliente+fecha permite otra dirección de tiempo para ese único cliente. Requiere entender dirección de recorrido frente a dirección física declarada.
-
-### Cómo interpretar el resultado
-
-Con igualdad por cliente, las fechas quedan ordenadas dentro de ese bloque; sin igualdad el orden global de fechas no es necesariamente el deseado.
-
-> **Precaución técnica.** La dirección en los compuestos importa cuando existen varios campos ordenados.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Filtrar por cliente y ordenar por fecha descendente.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 14, ficha imprimible -->
-## 12. Igualdad y rango
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Una condición de rango puede leer un tramo contiguo cuando sigue campos de igualdad.
-
-Un rango acota un intervalo: importe entre 650 y 660, por ejemplo. Si el índice empieza por un campo de igualdad y continúa por importe, el motor puede navegar hasta el límite inferior y parar en el superior. En cambio, si la condición selecciona casi todas las ventas, un COLLSCAN puede resultar competitivo. El objeto indexBounds del plan, cuando aparece, ayuda a ver qué intervalo se leyó. No confundas «el índice existe» con «los límites se aprovecharon».
-
-### Caso que resuelve
-
-Ventas pagadas de importe superior a 600. Inspeccionar indexBounds y los documentos examinados.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({estado:"pagada",importe:{$gt:600}})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({importe:{$gte:650,$lt:660}}).explain("executionStats")
-```
-
-Un intervalo corto delimita pocos valores. Repite con {$gte:5,$lt:905}: el segundo intervalo contiene casi toda la distribución y la justificación del índice cambia.
-
-### Cómo interpretar el resultado
-
-El límite inferior o superior de importe aparece en indexBounds si existe clave aprovechable; los documentos devueltos no bastan para medir eficiencia.
-
-> **Precaución técnica.** Un rango muy amplio reduce la ventaja del índice.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Ventas pagadas de importe superior a 600.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 15, ficha imprimible -->
-## 13. Sort y límites
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice adecuado puede evitar una fase de ordenación costosa; un limit reduce el volumen devuelto, pero no corrige por sí solo la búsqueda ineficiente.
-
-La consulta «10 pagadas más recientes» combina tres costes: encontrar pagadas, ordenar las coincidencias y devolver diez. Con un compuesto que preserve el orden se puede leer solo el tramo útil; sin él, el motor puede trabajar sobre muchos candidatos antes de entregar diez. Dibuja dos flujos: FILTRO → SORT → LIMIT frente a ACCESO INDEXADO ORDENADO → LIMIT. Una mejora de latencia no prueba por sí sola que se evitó ordenar: hay que comprobar el plan.
-
-### Caso que resuelve
-
-Top 10 de ventas más recientes de un estado. Medir plan antes de atribuir la mejora a limit.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({estado:"pagada"}).sort({fecha:-1}).limit(10)
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({estado:"pagada"}).sort({fecha:-1}).limit(1).explain("executionStats")
-```
-
-El top 1 es un buen caso para separar ordenación indexada de ordenar un conjunto enorme y después descartar filas. Identifica si la etapa SORT aparece.
-
-### Cómo interpretar el resultado
-
-Una respuesta de diez resultados puede requerir ordenar cientos de miles de candidatos; el árbol revela si SORT persiste.
-
-> **Precaución técnica.** Un orden incorrecto del compuesto puede hacer que aparezca SORT.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Top 10 de ventas más recientes de un estado.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 16, ficha imprimible -->
-## 14. Covered queries
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Si filtro y proyección quedan resueltos por el índice, el motor puede evitar FETCH. La exclusión explícita de _id suele ser relevante.
-
-Una consulta cubierta exige que el índice proporcione tanto la condición como todos los campos devueltos. Con {clienteId:1,fecha:-1}, proyectar exclusivamente clienteId y fecha, excluyendo _id, puede resolverse sin leer documentos. Si agregas descripcion, aparece la necesidad de FETCH. El indicador decisivo es totalDocsExamined=0, junto con un plan compatible; nReturned puede ser mayor que cero. Una consulta cubierta no implica que solo se examinen las claves necesarias para los resultados.
-
-### Caso que resuelve
-
-FILTRO → PROYECCIÓN → SIN FETCH
-
-Consultar solo clienteId y fecha. Buscar totalDocsExamined=0 cuando se cumple la cobertura.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809},{_id:0,clienteId:1,fecha:1})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809},{_id:0,clienteId:1,fecha:1}).explain("executionStats")
-```
-
-En una consulta cubierta la lectura de documentos puede quedar en cero. Añade descripcion a la proyección y contrasta con el caso anterior sin cambiar filtro.
-
-### Cómo interpretar el resultado
-
-Excluir _id y devolver exclusivamente clienteId y fecha permite, si se elige el compuesto, totalDocsExamined=0; agregar descripcion rompe la cobertura.
-
-> **Precaución técnica.** No dar por cubierta una proyección que incorpora campos ausentes del índice.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Consultar solo clienteId y fecha.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 17, ficha imprimible -->
-## 15. COLLSCAN, IXSCAN y FETCH
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-COLLSCAN lee documentos de colección; IXSCAN recorre entradas de índice; FETCH recupera documentos necesarios. Los nombres de etapas pueden variar con el motor.
-
-COLLSCAN y IXSCAN nombran recorridos; FETCH señala recuperación de documentos. En explain puede verse FETCH encima de IXSCAN: significa que el índice orienta el acceso y los documentos se leen para terminar de resolver filtro o proyección. Un plan no es una cadena plana: puede haber ramas y etapas diferentes, especialmente con el motor de ejecución SBE de versiones modernas. Enseña a localizar indexName y los contadores, no a memorizar una captura específica de otro lanzamiento.
-
-### Caso que resuelve
-
-IXSCAN → FETCH → RESULTADO
-
-La misma consulta puede pasar de COLLSCAN a IXSCAN y FETCH. Leer el árbol ganador completo, no solo la primera etiqueta.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).explain("executionStats")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).explain("executionStats")
-```
-
-La presencia de IXSCAN no implica que el filtro estado esté también resuelto por el mismo índice. Un FETCH puede aplicar parte del filtro sobre documentos recuperados.
-
-### Cómo interpretar el resultado
-
-En un plan INDEX_SCAN+FETCH, las claves examinadas no deben confundirse con documentos leídos: ambas cantidades contestan preguntas distintas.
-
-> **Precaución técnica.** No interpretar IXSCAN como prueba automática de una consulta óptima.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «La misma consulta puede pasar de COLLSCAN a IXSCAN y FETCH.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 18, ficha imprimible -->
-## 16. Estadísticas que importan
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-nReturned, totalDocsExamined y totalKeysExamined permiten razonar sobre trabajo realizado. Un cociente elevado entre examinados y devueltos sugiere revisión.
-
-nReturned cuenta resultados; totalDocsExamined cuenta exámenes de documentos; totalKeysExamined cuenta entradas de índices leídas. Si salen diez ventas y el motor examinó 200.000 documentos, hay potencial de optimización. Si examina solo diez claves pero diez documentos, la consulta es selectiva pero no cubierta. Si examina cien claves y cero documentos, puede estar cubierta pero seguir recorriendo claves adicionales. Cada contador describe un fenómeno distinto; comparar índices requiere leerlos juntos.
-
-### Caso que resuelve
-
-KEYS → DOCS → RETURNED
-
-20 documentos devueltos frente a 200000 examinados. Conservar capturas/JSON de antes y después bajo idénticos datos.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).explain("executionStats").executionStats
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).explain("executionStats").executionStats
-```
-
-Si nReturned es diez y docsExamined también diez, el acceso ya evita casi todo el escaneo. Un keysExamined de diez tampoco garantiza que el coste total de la petición sea cero.
-
-### Cómo interpretar el resultado
-
-nReturned bajo con docsExamined alto señala trabajo descartado; keysExamined alto con docsExamined cero puede ser consulta cubierta pero aun poco selectiva.
-
-> **Precaución técnica.** executionTimeMillis varía por cachés, calentamiento y selección de plan.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «20 documentos devueltos frente a 200000 examinados.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 19, ficha imprimible -->
-## 17. explain: queryPlanner
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-queryPlanner describe el plan seleccionado, índices considerados y la estructura general. No ejecuta la consulta completa en el mismo sentido que executionStats.
-
-queryPlanner muestra qué acceso ganaría y bajo qué forma. Úsalo cuando quieras entender la selección de un índice sin confundirlo con una prueba de carga. El plan ganador puede contener campos distintos según el motor y la versión. Explica por qué una elección del optimizador puede ser razonable incluso si existe otra candidata. Su propósito es elegir el coste estimado de un camino, no ratificar el índice que el alumno acaba de crear.
-
-### Caso que resuelve
-
-Determinar si existe un IXSCAN y cuál es indexName. Utilizar queryPlanner al estudiar qué plan elegiría MongoDB.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).explain("queryPlanner")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).explain("queryPlanner").queryPlanner.winningPlan
-```
-
-Identifica indexName, si aparece, y el alcance del plan elegido. No atribuyas a esta modalidad los contadores de ejecución que pertenecen a executionStats.
-
-### Cómo interpretar el resultado
-
-queryPlanner puede mostrar plan candidato sin ejecutar todos los documentos como executionStats; úsalo para estudiar forma de acceso.
-
-> **Precaución técnica.** No confundir winningPlan con todos los planes explorados.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Determinar si existe un IXSCAN y cuál es indexName.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 20, ficha imprimible -->
-## 18. explain: executionStats
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-executionStats ejecuta el plan ganador y resume el trabajo. Es la modalidad principal para las comparaciones docentes.
-
-executionStats añade el trabajo efectuado para el plan ganador. Para una comparación A/B conserva el mismo conjunto de datos y ejecuta el mismo filtro con la misma proyección. Registrar solo executionTimeMillis no basta: el caché, la simultaneidad y el sistema pueden cambiar los tiempos. Anotar los tres contadores junto a la estructura ganadora constituye un resultado replicable y técnicamente interpretable. En 8.0 algunas etapas del árbol no tienen el aspecto de manuales antiguos.
-
-### Caso que resuelve
-
-Medir claves examinadas y documentos examinados con mismo filtro. Repetir y documentar valores; confirmar tamaño de colección.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({numero:250001}).explain("executionStats")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).explain("executionStats").executionStats.totalKeysExamined
-```
-
-La cantidad de claves recorridas permite distinguir entre un índice consultado de forma selectiva y un recorrido indexado casi total. Guárdala junto a docsExamined.
-
-### Cómo interpretar el resultado
-
-El plan ejecutado aporta métricas reales del trabajo durante explain, pero el tiempo incorpora características del experimento y puede variar.
-
-> **Precaución técnica.** El tiempo de explain no equivale a una medida rigurosa de latencia de producción.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Medir claves examinadas y documentos examinados con mismo filtro.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 21, ficha imprimible -->
-## 19. explain: allPlansExecution
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-allPlansExecution permite consultar información parcial de planes candidatos durante su selección, útil para explorar optimización.
-
-allPlansExecution añade estadísticas parciales recogidas durante la selección de alternativas. No son benchmarks completos ni autorizan a comparar todas las candidatas como si hubieran procesado la consulta entera. Úsalo para explicar por qué el planificador puede comparar varios accesos y seleccionar uno. En formación introductoria, enséñalo después de queryPlanner y executionStats; no es el punto de partida para descubrir qué es un índice.
-
-### Caso que resuelve
-
-Varias rutas de acceso posibles en colección con múltiples índices. Analizar después del plan ganador, sin sobrecargar el nivel introductorio.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).explain("allPlansExecution")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).explain("allPlansExecution").executionStats.allPlansExecution
-```
-
-Las estadísticas de selección reflejan pruebas parciales; no representan una ejecución completa por cada plan candidato. En un plan con un único índice quizá no aparezcan múltiples alternativas interesantes.
-
-### Cómo interpretar el resultado
-
-En allPlansExecution las estadísticas de alternativas son parciales; comparar sus tiempos como si fueran benchmarks completos sería erróneo.
-
-> **Precaución técnica.** Las estadísticas parciales de candidatos no son ejecuciones completas.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Varias rutas de acceso posibles en colección con múltiples índices.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 22, ficha imprimible -->
-## 20. Uso controlado de hint
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-hint fuerza un índice concreto y permite comparaciones experimentales. No debe introducirse por defecto en aplicaciones como solución universal.
-
-hint resulta útil para comparar un candidato con otro sin depender de la decisión del planificador. Solo tiene sentido si el índice existe y el filtro puede interpretarse adecuadamente. Forzar un acceso malo puede elevar muchísimo el trabajo. Enseña a retirar hint antes de trasladar una consulta a código de aplicación: una pista fija que hoy funciona puede bloquear mejoras después de que cambien los datos, el motor o la distribución.
-
-### Caso que resuelve
-
-Comparar ix_cliente contra otro índice deliberadamente menos apto. Usar hint como instrumento diagnóstico y retirar tras el análisis.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({clienteId:809}).hint({clienteId:1}).explain("executionStats")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809}).hint({clienteId:1}).explain("executionStats")
-```
-
-Esta orden fija el camino de acceso y permite contrastarlo con la selección espontánea. Si el optimizador elige otro plan, discute por qué las condiciones de la consulta lo favorecen.
-
-### Cómo interpretar el resultado
-
-Forzar clienteId:1 solo tiene sentido cuando la clave existe; explica si el plan impuesto coincide con la elección espontánea del optimizador.
-
-> **Precaución técnica.** Forzar un índice inadecuado puede empeorar tiempos significativamente.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Comparar ix_cliente contra otro índice deliberadamente menos apto.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 23, ficha imprimible -->
-## 21. Índices multikey automáticos
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Al indexar arrays MongoDB mantiene entradas para sus elementos. No existe una palabra clave createIndex multikey específica.
-
-El campo etiquetas guarda varios valores; al indexarlo, MongoDB crea entradas asociadas a cada valor distinto del array. Un documento etiquetado como venta, web y urgente puede originar varias claves, pero el resultado lógico de find no debe aparecer triplicado. Observa isMultiKey donde esté disponible. El coste no depende solo de cuántos documentos hay, también de cuántos elementos contienen sus arrays. Una actualización de etiquetas puede modificar varias entradas.
-
-### Caso que resuelve
-
-ARRAY → ENTRADAS → DOCUMENTO
-
-Localizar ventas con etiqueta urgente. Inspeccionar isMultiKey o multikeyPaths cuando aparezcan.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({etiquetas:1},{name:"ix_etiquetas"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({etiquetas:"web"}).limit(10).explain("executionStats")
-```
-
-La coincidencia de una etiqueta no debe duplicar una venta aunque el array tenga varias etiquetas. Revisa el documento real y diferencia los elementos del array de las entradas del índice.
-
-### Cómo interpretar el resultado
-
-Un índice sobre etiquetas genera entradas para elementos del array; observar isMultiKey y confirmar que una venta coincidente se devuelve una sola vez.
-
-> **Precaución técnica.** Un documento con varias coincidencias no se devuelve varias veces por ellas.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Localizar ventas con etiqueta urgente.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 24, ficha imprimible -->
-## 22. Restricciones multikey
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-En índices compuestos existen restricciones cuando se indexan simultáneamente varios campos que contienen arrays del mismo documento.
-
-Un índice compuesto puede combinar un array y un campo escalar, por ejemplo {etiquetas:1,estado:1}. Sin embargo, los índices compuestos multikey tienen restricciones si hay arrays paralelos en varios campos del mismo documento. No construyas un ejercicio que falle sin explicarlo: crea antes un documento con a:[1,2] y b:"X"; después ensaya de forma aislada un segundo documento donde a y b sean arrays y captura el error. La restricción afecta al modelo de documentos admitido por ese índice.
-
-### Caso que resuelve
-
-Documento con etiquetas y cupones como arrays separados. Modelar consultas y validar límites antes de diseñar un compuesto.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({etiquetas:"urgente"}).explain("executionStats")
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.multikey_demo.insertOne({a:[1,2],b:["X","Y"]})
-```
-
-Con un compuesto sobre a y b, este intento puede provocar error de arrays paralelos. Es una prueba negativa de esquema; debe realizarse en colección separada y capturar el error, no romper ventas.
-
-### Cómo interpretar el resultado
-
-Un compuesto puede tener un campo array y otros escalares; múltiples campos array del mismo documento pueden activar la limitación parallel arrays.
-
-> **Precaución técnica.** No prometer que cualquier combinación de arrays se puede indexar.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Documento con etiquetas y cupones como arrays separados.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 25, ficha imprimible -->
-## 23. Text index clásico
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice de texto permite búsquedas por términos con $text y $search en despliegues compatibles. No es equivalente a Atlas Search.
-
-El índice text clásico crea una representación de términos, no de cualquier subcadena. Una búsqueda de «bicicleta» sobre descripcion se parece a buscar palabras en un índice invertido. Stemming y reglas lingüísticas pueden variar por default_language; no esperes que coincida siempre un fragmento a mitad de palabra. Una colección autogestionada dispone de las limitaciones propias del índice text; Atlas Search es una tecnología diferente y no se obtiene automáticamente por usar $text.
-
-### Caso que resuelve
-
-TÉRMINOS → TEXT → RESULTADOS
-
-Encontrar descripciones que contienen bicicleta o café. En la clase se utiliza texto clásico sobre un MongoDB local.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({descripcion:"text"},{name:"ix_descripcion_texto",default_language:"spanish"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({$text:{$search:"cafe"}},{_id:0,descripcion:1}).limit(5)
-```
-
-La búsqueda por término devuelve descripciones que contienen vocabulario relacionado según el analizador, no todos los textos que incluyen literalmente una cadena de caracteres arbitraria.
-
-### Cómo interpretar el resultado
-
-La búsqueda $text requiere un índice de tipo text en esta colección; puede aplicar stemming según idioma y no equivale a buscar subcadenas.
-
-> **Precaución técnica.** Existen límites en idioma, ponderaciones, cantidad de índices y ordenación.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Encontrar descripciones que contienen bicicleta o café.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 26, ficha imprimible -->
-## 24. Relevancia de texto
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-textScore aporta una puntuación relativa de relevancia, útil al ordenar resultados de $text en el índice clásico.
-
-textScore ofrece una puntuación de relevancia para coincidencias de $text. No es una probabilidad, ni una distancia, ni equivale a la puntuación de Atlas Search. Si cambias el texto de búsqueda cambias también el contexto en que se interpreta el score. Proyecta la puntuación con {$meta:"textScore"} y ordénala con el mismo metadato. Compara dos descripciones, una con un término y otra con varios, sin prometer un valor numérico concreto.
-
-### Caso que resuelve
-
-Ordenar coincidencias por score calculado. Explicar ranking relativo y diferenciarlo del orden lexicográfico.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({$text:{$search:"bicicleta"}},{score:{$meta:"textScore"}}).sort({score:{$meta:"textScore"}})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({$text:{$search:"cafe bicicleta"}},{descripcion:1,p:{$meta:"textScore"}}).sort({p:{$meta:"textScore"}}).limit(3)
-```
-
-La relevancia se interpreta dentro de esta consulta y de estos términos. El score sirve para ordenar, pero no puede expresarse como probabilidad de que el documento sea «correcto». 
-
-### Cómo interpretar el resultado
-
-El resultado de $meta textScore solo es comparable dentro de la búsqueda realizada; ordenar por score no sustituye un índice ordenado convencional.
-
-> **Precaución técnica.** No esperar prestaciones de motor de búsqueda avanzado.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Ordenar coincidencias por score calculado.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 27, ficha imprimible -->
-## 25. Búsqueda textual: límites
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Stemming, stopwords y opciones de idioma alteran coincidencias. Las búsquedas por subcadenas, fuzzy o autocomplete requieren otras soluciones.
-
-El alumno suele confundir búsqueda de texto con contains. $text trabaja con términos tokenizados y puede manejar variaciones lingüísticas; regex busca patrones y tiene otro perfil de índices; Atlas Search proporciona capacidades más amplias en entornos Atlas. Un índice text no arregla automáticamente $regex no anclados. Diseña una necesidad real —«producto que menciona café»— antes de elegir entre coincidencia textual, búsqueda de prefijo o motor de búsqueda dedicado.
-
-### Caso que resuelve
-
-La palabra bicicleta no equivale a un substring arbitrario de una descripción. Plantear un caso sencillo y documentar el idioma elegido.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({$text:{$search:"cafe"}}).limit(3)
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({descripcion:/^cafe/}).limit(5)
-```
-
-Una expresión regular de prefijo y $text resuelven preguntas distintas. Contrasta también una regex no anclada: tener índice text no constituye garantía de optimización para ese patrón.
-
-### Cómo interpretar el resultado
-
-Una cadena buscada como fragmento en medio de una palabra no necesariamente coincide; distinguir tokenización de regex y de Atlas Search.
-
-> **Precaución técnica.** Evitar comparar sin matices con expresiones regulares.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «La palabra bicicleta no equivale a un substring arbitrario de una descripción.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 28, ficha imprimible -->
-## 26. Índices geoespaciales 2dsphere
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-2dsphere indexa ubicaciones geográficas sobre GeoJSON y permite proximidad. Las coordenadas GeoJSON son [longitud,latitud].
-
-GeoJSON representa un punto como {type:"Point", coordinates:[longitud,latitud]}. Invertir ese orden es un error frecuente porque muchas interfaces enseñan primero latitud. Un índice 2dsphere interpreta geometría sobre la superficie terrestre y habilita ciertas consultas de proximidad. La validez geográfica y la exactitud de las coordenadas son parte del experimento: no basta con que la estructura JSON sea sintácticamente correcta. Usa puntos sintéticos, no geolocalización privada.
-
-### Caso que resuelve
-
-GEOJSON → 2DSPHERE → RADIO
-
-Ventas cercanas a una posición en Madrid. Crear índice 2dsphere y realizar consulta $near con distancia en metros.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({ubicacion:"2dsphere"},{name:"ix_ubicacion"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.findOne({}, {ubicacion:1,_id:0})
-```
-
-El orden de las coordenadas del punto es [longitud,latitud]. Verificar el dato antes de crear el índice evita atribuir a MongoDB un error que en realidad está en la geometría.
-
-### Cómo interpretar el resultado
-
-2dsphere acepta puntos GeoJSON válidos; la latitud y longitud intercambiadas cambian el lugar geográfico, no son un detalle tipográfico.
-
-> **Precaución técnica.** Invertir latitud y longitud es un error frecuente.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Ventas cercanas a una posición en Madrid.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 29, ficha imprimible -->
-## 27. Geoespacial: $near
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Las consultas por proximidad devuelven elementos próximos y requieren el índice geoespacial adecuado.
-
-La búsqueda $near necesita un índice geoespacial compatible. En el ejemplo, el centro es [-3.70,40.42] y $maxDistance=1000 se interpreta como 1.000 metros cuando se usa GeoJSON con 2dsphere. Los resultados se aproximan al centro y pueden ordenarse según proximidad. No compares el tiempo de $near con una colección sin índice que ni siquiera admite correctamente esa operación: es un ejemplo de capacidad habilitada por el índice, no solo de aceleración.
-
-### Caso que resuelve
-
-Buscar ventas dentro de 1500 metros del punto de referencia. Comprobar orden y la distancia usada en GeoJSON.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.find({ubicacion:{$near:{$geometry:{type:"Point",coordinates:[-3.70,40.42]},$maxDistance:1500}}}).limit(5)
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({ubicacion:{$near:{$geometry:{type:"Point",coordinates:[-3.70,40.42]},$maxDistance:200}}}).limit(5)
-```
-
-Bajar el radio a doscientos metros no cambia la definición del índice. Cambia el conjunto espacial de candidatos y permite discutir unidades y proximidad.
-
-### Cómo interpretar el resultado
-
-Con $near sobre GeoJSON la distancia máxima se expresa en metros y el índice 2dsphere es condición necesaria para el operador empleado.
-
-> **Precaución técnica.** No confundir radianes de geometría esférica con metros de $maxDistance en GeoJSON.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Buscar ventas dentro de 1500 metros del punto de referencia.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 30, ficha imprimible -->
-## 28. Hashed: finalidad real
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Los hashed indexes almacenan un hash del valor y se usan especialmente en estrategias de distribución por clave hash.
-
-Una clave hashed registra un hash del valor; favorece ciertos escenarios de distribución, especialmente relacionados con sharding. Como el hash destruye el orden natural, no sirve para resolver rangos de idGrupo como lo haría un índice ascendente. Una consulta de igualdad sí puede utilizarlo. No presentes hashed como «índice más rápido» ni como función de seguridad criptográfica de contraseñas: resuelve un problema de distribución y acceso por igualdad.
-
-### Caso que resuelve
-
-Distribuir operaciones por idGrupo en una colección fragmentada conceptual. Explicar su pertinencia para igualdad y sharding.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({idGrupo:"hashed"},{name:"ix_grupo_hash"})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({idGrupo:{$gte:100,$lte:200}}).explain("executionStats")
-```
-
-El índice hashed sirve para igualdad, pero los hashes de 100 y 200 no delimitan una secuencia ordenada de los valores intermedios.
-
-### Cómo interpretar el resultado
-
-El hash dispersa valores con proximidad numérica; una comparación por rango no conserva el orden y no puede sacar la misma ventaja.
-
-> **Precaución técnica.** No utilizarlos esperando acelerar rangos o recuperar orden natural.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Distribuir operaciones por idGrupo en una colección fragmentada conceptual.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 31, ficha imprimible -->
-## 29. Índices únicos
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-unique impide valores duplicados de la clave indexada y constituye una restricción de integridad.
-
-unique convierte la integridad de datos en una regla atómica del servidor. Si ya existe codigo F-001, intentar insertar otra factura con el mismo valor debe fallar con E11000. No intentes observar el error insertando datos duplicados en ventas, porque perjudicarías los demás laboratorios. Usa facturas_demo. Antes de construir unique sobre datos existentes hay que detectar duplicados y decidir cómo resolverlos. La unicidad tampoco sustituye una política de autorización.
-
-### Caso que resuelve
-
-Dos ventas no pueden compartir numero de pedido. Probar una inserción duplicada y capturar error E11000.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({numero:1},{name:"ix_numero",unique:true})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-try {db.facturas_demo.insertOne({codigo:"F-001"})} catch(e) {print(e.code)}
-```
-
-El conflicto 11000 es intencional si F-001 ya existe bajo la restricción. Si no falla, revisa primero que la colección y el índice unique se prepararon como estaba indicado.
-
-### Cómo interpretar el resultado
-
-El intento de crear clave duplicada bajo unique debe producir E11000. El alumno debe comprobar que la segunda operación no insertó el documento.
-
-> **Precaución técnica.** Antes de crearlo, inspeccionar duplicados existentes.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Dos ventas no pueden compartir numero de pedido.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 32, ficha imprimible -->
-## 30. Unique compuesto
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice unique compuesto exige que la combinación de campos sea única, no que cada campo lo sea por separado.
-
-En una colección independiente como inscripciones_unique_demo, el índice {tiendaId:1,codigo:1} unique permite que dos tiendas compartan código si la pareja es distinta. No utilices facturas_demo si ya tiene un índice único sobre codigo aislado. El error emerge al repetir la combinación completa. Explica también que los valores null y los campos ausentes participan en reglas de índices únicos; una colección con muchos documentos sin campo puede impedir crear cierto unique simple. Para opcionalidad, estudiar índices parciales y el diseño de esquema evita expectativas incorrectas.
-
-### Caso que resuelve
-
-Combinación {tiendaId,referencia} en facturas. Explicar unicidad de la tupla y qué pasa al variar una columna.
-
-### Demostración o comprobación
-
-```javascript
-db.facturas.createIndex({tiendaId:1,referencia:1},{unique:true})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.inscripciones_unique_demo.createIndex({tiendaId:1,codigo:1},{unique:true})
-```
-
-Una clave única de dos campos admite repetir codigo entre tiendas distintas. El alumno debe ensayar dos combinaciones legales y una combinación repetida que se rechace.
-
-### Cómo interpretar el resultado
-
-La unicidad de la combinación permite misma referencia en tiendas distintas, pero prohíbe repetir la misma pareja; documentar null y ausencias.
-
-> **Precaución técnica.** Valores ausentes y nulos necesitan diseño explícito.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Combinación {tiendaId,referencia} en facturas.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 33, ficha imprimible -->
-## 31. Sparse y partial
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice parcial solo indexa documentos que cumplen un filtro; sparse omite entradas correspondientes a campos ausentes en ciertos índices.
-
-Un índice partial almacena solo documentos que cumplen partialFilterExpression. Una búsqueda puede aprovecharlo si sus condiciones garantizan que todos los resultados están dentro de esa fracción. Si la consulta no exige estado=pagada, utilizar un índice que solo contiene pagadas perdería datos: el planificador no debe considerarlo suficiente. Sparse es un mecanismo diferente, basado en presencia del campo. Diseña la regla a partir del patrón de consultas, no solo del tamaño deseado.
-
-### Caso que resuelve
-
-Indexar solo pedidos activos en lugar de todos los estados. Preferir reglas parciales explícitas cuando el caso lo requiera.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.createIndex({clienteId:1},{partialFilterExpression:{estado:"pagada"}})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).explain("executionStats")
-```
-
-Para utilizar la versión parcial de un índice por cliente, el predicado debe garantizar pertenencia al subconjunto pagado. El planificador evita resultados incompletos.
-
-### Cómo interpretar el resultado
-
-El plan puede emplear el índice parcial si la consulta restringe estado=pagada; si omite estado, ese índice no representa el conjunto completo.
-
-> **Precaución técnica.** Una consulta que no implica el filtro parcial puede no usar el índice.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Indexar solo pedidos activos en lugar de todos los estados.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 34, ficha imprimible -->
-## 32. TTL: caducidad diferida
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-Un índice TTL borra documentos según campo Date y expireAfterSeconds, con un monitor periódico. No elimina instantáneamente al alcanzar el plazo.
-
-TTL automatiza eliminación eventual de documentos expirados, como tokens o sesiones de demostración. No es una agenda exacta al segundo: un monitor en segundo plano selecciona documentos elegibles y puede retrasarse. Un índice TTL convencional es de un solo campo sobre fechas BSON; no utilices strings que parezcan fechas. Nunca apliques TTL accidentalmente a ventas que deban conservarse por obligación legal. La política de retención es una decisión de negocio y de cumplimiento, no un truco de rendimiento.
-
-### Caso que resuelve
-
-FECHA → MONITOR TTL → BORRADO
-
-Sesiones temporales o tokens ficticios con fecha de expiración. Usar colección independiente para no perder datos de ventas.
-
-### Demostración o comprobación
-
-```javascript
-db.sesiones.createIndex({creadoEn:1},{expireAfterSeconds:60})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.sesiones_demo.getIndexes()
-```
-
-Comprueba que expireAfterSeconds pertenece al índice apropiado y que el campo almacena fechas. La eliminación es por caducidad, no una orden directa de deleteMany.
-
-### Cómo interpretar el resultado
-
-El monitor TTL elimina documentos elegibles en segundo plano. La observación correcta es eventual, no una promesa de borrado al cumplir exacto sesenta segundos.
-
-> **Precaución técnica.** Nunca enseñar TTL como un cronómetro de precisión al segundo.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Sesiones temporales o tokens ficticios con fecha de expiración.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 35, ficha imprimible -->
-## 33. TTL: campo y cálculo
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-expireAfterSeconds cuenta desde una fecha almacenada, salvo patrón de fecha de expiración absoluta con cero segundos.
-
-expireAfterSeconds:60 se interpreta con respecto al valor del campo Date: un documento creado hace dos minutos ya es elegible, uno creado ahora no. El monitor puede tardar en ejecutar el borrado. Si se usa expireAfterSeconds:0, el propio campo suele representar el instante de expiración. La diferencia es crucial: no mezclar el campo fechaDeCreacion con fechaDeCaducidad sin ajustar el valor. Una consulta countDocuments demuestra el estado observado, no el instante exacto del monitor.
-
-### Caso que resuelve
-
-Una sesión creada hace dos minutos ya es elegible para caducar. Crear fechas Date reales y verificar tras esperar el ciclo TTL.
-
-### Demostración o comprobación
-
-```javascript
-db.sesiones.insertOne({usuario:"demo",creadoEn:new Date(Date.now()-120000)})
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.sesiones_demo.find({}, {_id:0,creadoEn:1,tipo:1}).toArray()
-```
-
-Distingue elegibilidad temporal de ejecución efectiva del monitor. La misma observación repetida más tarde constituye la prueba razonable de TTL.
-
-### Cómo interpretar el resultado
-
-Una fecha dos minutos anterior con TTL de un minuto ya cumple el criterio; una fecha actual aún no, aunque ambas existan al insertar.
-
-> **Precaución técnica.** Cadenas ISO guardadas como strings no equivalen a fechas BSON.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Una sesión creada hace dos minutos ya es elegible para caducar.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
-
-
-<!-- Hoja didáctica 36, ficha imprimible -->
-## 34. Ocultar y eliminar índices
-*Explicación, evidencia y criterio técnico*
-
-### Concepto y mecanismo
-
-hideIndex permite excluir temporalmente un índice de la planificación; dropIndex lo elimina. Son herramientas de mantenimiento.
-
-hideIndex oculta un índice al planificador sin retirarlo físicamente. Permite estudiar el efecto que tendría su ausencia y después revertir la prueba; mientras esté oculto sigue consumiendo espacio y trabajo en escrituras. dropIndex sí elimina el índice. Evita modificar _id_ y documenta la reversión. Esta herramienta es útil para retirada prudente, pero la prueba de un día no captura consultas mensuales o cierres contables.
-
-### Caso que resuelve
-
-Verificar si un índice redundante es necesario antes de borrarlo. Ocultar, observar los planes y restaurar o eliminar con criterio.
-
-### Demostración o comprobación
+En algunas versiones y configuraciones podemos **ocultar** un índice para impedir que el optimizador lo elija en planes normales, sin eliminar su definición. Esto permite estudiar cómo se comportan las consultas si dejamos de ofrecerlo al planificador:
 
 ```javascript
 db.ventas.hideIndex("ix_cliente")
 ```
 
-### Segunda situación para contrastar
+Después podríamos volver a mostrarlo:
 
 ```javascript
-db.ventas.getIndexes().filter(x=>x.hidden)
+db.ventas.unhideIndex("ix_cliente")
 ```
 
-Esta consulta permite saber qué índice fue ocultado. Restaurarlo antes de continuar evita comparar planes de un estado desconocido.
+Ocultar no significa liberar su espacio o dejar de mantenerlo. El índice sigue existiendo, y el servidor debe conservar su consistencia. No confundas «no disponible para el planificador» con «eliminado de la colección».
 
-### Cómo interpretar el resultado
+## 11.3. Eliminar un índice es una decisión con riesgo
 
-hideIndex vuelve invisible el índice al planificador pero mantiene su actualización. Después de la prueba conviene restaurarlo con unhideIndex.
+```javascript
+db.ventas.dropIndex("ix_cliente")
+```
 
-> **Precaución técnica.** Ocultar no recupera el coste de mantenimiento de escritura.
+Eliminar un índice puede reducir mantenimiento y espacio, pero también puede empeorar consultas que dependían de él. En un sistema real conviene conocer métricas de uso, necesidades del producto y ventanas de mantenimiento. No se recomienda borrar índices en producción solo para comprobar una idea de clase.
 
-### Comprobación de comprensión
+En las prácticas usamos exclusivamente colecciones de demostración que podemos reconstruir.
 
-¿Qué resultado o evidencia confirmaría el caso «Verificar si un índice redundante es necesario antes de borrarlo.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
+## 11.4. Qué queremos aprender al medir un millón de ventas
+
+Si repetimos el mismo experimento con 200.000 y 1.000.000 de documentos, no estamos buscando un número mágico de milisegundos. Queremos razonar sobre cómo crece el trabajo de un recorrido completo y cómo un índice muy selectivo evita recorrer todo el conjunto.
+
+Para que la comparación tenga sentido debemos documentar:
+- mismo patrón de consulta;
+- cantidad exacta de datos;
+- índice disponible o ausente;
+- resultados devueltos;
+- claves y documentos examinados;
+- entorno de ejecución;
+- diferencias de planificación o caché que puedan explicar tiempos.
+
+**Conclusión del capítulo:** un índice se justifica por las necesidades de consulta y la evidencia de su efecto, no por su mera existencia. La persona que administra la base debe saber explicar qué problema resuelve y qué coste agrega.
+
+### Comprobación integrada
+
+Una aplicación tiene tres operaciones: buscar un pedido por número, mostrar los últimos pedidos pagados y localizar etiquetas de riesgo en una lista. Propón un índice candidato para cada una y explica la función del campo o del orden de campos. A continuación indica qué revisarías con `explain` y cómo estimarías el coste de mantener esos índices ante nuevas ventas.
+
+No necesitas acertar todos los detalles de un plan sin ejecutarlo. Necesitas formular una hipótesis comprobable.
 
 
 ---
 
+# Unidad 12. Qué ocurre dentro de un índice: del libro al árbol B
 
-<!-- Hoja didáctica 37, ficha imprimible -->
-## 35. Observabilidad del ciclo de vida
-*Explicación, evidencia y criterio técnico*
+## 12.1. Por qué no basta con guardar una lista ordenada en cualquier sitio
 
-### Concepto y mecanismo
+Hasta ahora hemos comparado un índice con un catálogo alfabético. Esa imagen es útil, pero deja una pregunta sin contestar: si hay un millón de claves, ¿cómo puede el motor localizar rápidamente una zona pequeña sin leerlas todas desde el comienzo?
 
-getIndexes y $indexStats ayudan a inventariar índices y uso registrado en el servidor. Una medición breve no representa toda la carga.
+Una manera ingenua sería guardar todos los números de venta en una lista y recorrerla hasta encontrar el número deseado. Pero eso sería otro recorrido secuencial, ahora sobre una lista en lugar de una colección. Para evitarlo se necesita una organización que permita **descartar grandes regiones de claves** en cada decisión.
 
-$indexStats informa de accesos observados desde un período de medición, no de la utilidad eterna del índice. Una baja cifra puede deberse a que la función que lo utiliza solo corre una vez al mes. Complementa uso, patrones de consultas, tamaños e impacto en escrituras. Para un inventario técnico, anota nombre, clave, opciones, consultas servidas y motivo de conservación. La retirada de índices debe planificarse y monitorizarse.
+Los índices ordenados de MongoDB se basan en estructuras de tipo árbol B, que mantienen las claves organizadas en una forma adecuada para búsquedas y recorridos eficientes. No necesitamos implementar un árbol desde cero, pero sí comprender la intuición.
 
-### Caso que resuelve
+## 12.2. El árbol como mapa de intervalos
 
-Comprobar si un índice se utiliza durante varios escenarios. Recoger tráfico representativo y consultar operaciones por índice.
+Imagina que la primera página de un índice permite decidir entre tres intervalos:
 
-### Demostración o comprobación
-
-```javascript
-db.ventas.aggregate([{$indexStats:{}}]).toArray()
+```text
+                          ¿QUÉ NÚMERO BUSCAS?
+                    ┌─────────┼────────────┐
+                 1–999     1000–4999    5000–9999
+                   │           │             │
+               más claves  más claves    más claves
+                   │           │             │
+            referencia a documentos adecuados
 ```
 
-### Segunda situación para contrastar
+Este dibujo **no reproduce la estructura física exacta de un índice MongoDB**. Representa una idea: cada decisión reduce el espacio de búsqueda. En un árbol B real, los nodos contienen varias claves y referencias que guían el descenso y facilitan recorridos ordenados.
+
+Si buscas la venta 8.700, no necesitas examinar todas las entradas correspondientes a 1–999. Puedes avanzar por la parte del árbol correspondiente al intervalo que incluye 8.700.
+
+## 12.3. Igualdad y rango recorren el árbol de forma diferente
+
+Una igualdad como:
 
 ```javascript
-db.ventas.aggregate([{$indexStats:{}}]).toArray()
+db.ventas.find({numero:8700})
 ```
 
-Los contadores solo describen la ventana observada; el índice de una tarea trimestral puede no tener accesos durante un curso de tres horas.
+puede dirigirse a la región donde estaría la clave buscada.
 
-### Cómo interpretar el resultado
+En cambio, un rango pide varias claves consecutivas:
 
-$indexStats cuenta accesos desde su ventana de registro; un índice marcado poco usado durante diez minutos puede ser esencial en el cierre mensual.
+```javascript
+db.ventas.find({
+  numero:{$gte:8700,$lt:8750}
+})
+```
 
-> **Precaución técnica.** Reinicios y periodos cortos pueden invalidar conclusiones.
+El motor localiza el inicio del intervalo y puede recorrer las entradas correspondientes hasta el final. Por eso un índice ordenado es útil no solo para identificar una venta, sino también para consultas por rangos.
 
-### Comprobación de comprensión
+No concluyas que toda consulta con `$gte` es eficiente: si el intervalo cubre casi la colección entera, puede haber que recorrer muchísimas claves. La selectividad sigue importando.
 
-¿Qué resultado o evidencia confirmaría el caso «Comprobar si un índice se utiliza durante varios escenarios.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
+## 12.4. De una clave al documento: por qué aparece FETCH
 
+La estructura de índice mantiene claves y referencias que permiten localizar documentos. Si la aplicación pide campos que no están en el índice, MongoDB necesita recuperar esos documentos.
+
+Por ejemplo, suponiendo que solo existe un índice por `numero`:
+
+```javascript
+db.ventas.find({numero:8700},{numero:1,descripcion:1})
+```
+
+Aunque el índice localice la venta por número, la descripción debe obtenerse del documento. Esa recuperación explica conceptualmente una etapa `FETCH`. No se debe confundir `IXSCAN` con «la consulta nunca toca la colección».
+
+## 12.5. Por qué las inserciones requieren trabajo
+
+Si agregas una venta con número 8.701, la estructura debe incorporar esa nueva clave en su lugar correspondiente, manteniendo su organización. Con muchas inserciones, modificaciones y eliminaciones, el índice exige mantenimiento.
+
+El coste exacto depende de detalles de almacenamiento, carga de trabajo y estructura de datos. Para el alumno basta con comprender la causalidad: **el índice facilita ciertos accesos porque mantiene información adicional organizada; mantenerla no es gratis**.
+
+## 12.6. ¿Qué ocurre cuando muchos documentos comparten una clave?
+
+Imagina un índice ordenado por `estado`. Miles de ventas tienen el valor `pagada`. La organización del índice puede localizar la región de ese estado, pero si pedimos todas las pagadas sigue habiendo un conjunto enorme de coincidencias.
+
+No existe magia: un índice no convierte miles de respuestas en una sola. La estructura ayuda a **localizar candidatos**, pero la aplicación debe pagar el coste de procesar y entregar lo que solicita.
+
+### Ejercicio razonado
+
+Un alumno afirma que «como el índice es un árbol, cualquier consulta lee tres nodos y termina». ¿Qué error conceptual contiene? Respuesta: el número de pasos depende de la estructura y del número de claves que cumplan la consulta; además puede haber recuperación de documentos, ordenación y procesamiento adicional. El árbol facilita el acceso, no elimina todas las operaciones.
 
 ---
 
+# Unidad 13. El optimizador de consultas y la lectura crítica de explain
 
-<!-- Hoja didáctica 38, ficha imprimible -->
-## 36. Índices y tamaño de memoria
-*Explicación, evidencia y criterio técnico*
+## 13.1. Tener un índice no obliga a utilizarlo
 
-### Concepto y mecanismo
+Supón que la colección posee índices por `numero`, `estado` y `fecha`. Para una búsqueda concreta, MongoDB evalúa planes posibles y selecciona uno según la información y los mecanismos disponibles.
 
-Los índices compiten por memoria y almacenamiento; los beneficios dependen del working set y del patrón real de acceso.
+No debemos imaginar que la aplicación escribe «utiliza ix_numero» cada vez que busca una venta. Normalmente escribimos una **consulta declarativa**: especificamos qué queremos obtener. El servidor decide cómo obtenerlo.
 
-La memoria cache almacena páginas de datos e índices; cuanto más voluminosas sean las estructuras activas, mayor puede ser la presión sobre recursos. indexSizes y stats aportan tamaños físicos, pero compresión y patrones de acceso impiden inferir linealmente el rendimiento. Un índice parcial puede ser útil si su subconjunto representa una parte pequeña de datos. La pregunta no es «¿cuántos índices puedo crear?», sino «¿qué conjunto mínimo justifica cada coste?».
+Esa distinción explica por qué debemos comprobar los planes en lugar de asumir que el índice que acabamos de crear será siempre el elegido.
 
-### Caso que resuelve
+## 13.2. Cómo se representa un plan
 
-Un índice que cabe en caché produce comportamiento diferente a uno muy grande. Documentar tamaño de colección, hardware y condiciones de la prueba.
-
-### Demostración o comprobación
+Al llamar a:
 
 ```javascript
-db.ventas.stats()
+db.ventas.find({numero:199998}).explain("executionStats")
 ```
 
-### Segunda situación para contrastar
+la respuesta contiene información de planificación y estadísticas. Puede haber diferentes capas del plan; las etapas más útiles para empezar son:
+
+- `COLLSCAN`: recorrido de documentos.
+- `IXSCAN`: recorrido de entradas de índice.
+- `FETCH`: recuperación de documentos a partir de candidatos.
+- `SORT`: ordenación independiente cuando no se obtiene directamente del acceso elegido.
+- `LIMIT` u otras etapas relacionadas con la cantidad devuelta.
+
+**No memorices una sola forma textual del JSON.** El formato exacto de `explain` y la representación de sus etapas puede variar entre versiones y motores de ejecución. Busca el significado de las operaciones, no solo una palabra a una profundidad fija.
+
+## 13.3. La diferencia entre plan ganador y estadísticas de ejecución
+
+En una explicación encontramos datos sobre el plan elegido y, con `executionStats`, contadores derivados de la ejecución. La elección del plan responde a «¿qué camino cree adecuado el motor?». Los contadores responden a «¿qué trabajo observamos al ejecutarlo?».
+
+Un `IXSCAN` puede ser un camino apropiado, pero aun así examinar decenas de miles de claves para resolver una consulta poco selectiva. Por eso debemos combinar la información cualitativa del plan con cifras como `totalKeysExamined` y `totalDocsExamined`.
+
+## 13.4. El peligro de interpretar una sola cifra
+
+Imagina dos planes:
+
+| Métrica | Plan A | Plan B |
+|---|---:|---:|
+| Documentos devueltos | 10 | 10 |
+| Claves examinadas | 25 | 18.000 |
+| Documentos examinados | 10 | 10 |
+| Ordenación independiente | No | Sí |
+
+En este escenario el Plan A parece evitar más trabajo para la misma consulta. Aun así, la decisión real requiere examinar carga, coste de mantener índices y repetibilidad de las pruebas.
+
+Un alumno podría elegir Plan B porque una ejecución aislada mostró menos milisegundos. Tal vez la caché, el orden de pruebas o la carga del ordenador influyeron. **No debemos convertir una anécdota temporal en una ley de optimización.**
+
+## 13.5. ¿Para qué sirve hint y cuándo evitarlo?
+
+`hint` permite solicitar un índice concreto en una consulta:
 
 ```javascript
-db.ventas.stats().indexSizes
+db.ventas.find({clienteId:809})
+  .hint("ix_cliente")
+  .explain("executionStats")
 ```
 
-El coste de bytes se pone en relación con los patrones de consulta y con el costo de mantener cada índice en escrituras.
+En clase es útil para comparar alternativas manteniendo el resto constante. En producción, forzar un índice sin necesidad puede impedir que el optimizador utilice un plan mejor cuando cambian los datos.
 
-### Cómo interpretar el resultado
+Una práctica responsable distingue:
+- **Experimento controlado:** utiliza `hint` para estudiar un índice.
+- **Consulta normal de aplicación:** deja al servidor elegir, salvo que exista una razón medida y documentada para intervenir.
 
-stats e indexSizes permiten estudiar memoria y espacio, pero compresión y working set impiden convertir cada byte en una predicción de latencia.
+## 13.6. Planificar una investigación
 
-> **Precaución técnica.** No atribuir diferencias de milisegundos solo a diseño lógico.
+Cuando alguien informa «esta pantalla va lenta», no crees índices inmediatamente. Primero pregunta:
 
-### Comprobación de comprensión
+1. ¿Qué operación es lenta y cuál es su consulta real?
+2. ¿Con qué frecuencia se ejecuta?
+3. ¿Qué filtros, proyección, ordenación y límite utiliza?
+4. ¿Cuántos documentos devuelve y cuántos examina?
+5. ¿Qué índices existen y cuáles podrían servir?
+6. ¿Qué alternativa podemos probar sin alterar datos reales?
+7. ¿Qué coste de mantenimiento tendría la mejora?
 
-¿Qué resultado o evidencia confirmaría el caso «Un índice que cabe en caché produce comportamiento diferente a uno muy grande.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
+Este protocolo evita optimizaciones basadas en intuición o en nombres de índices inventados.
 
 ---
 
+# Unidad 14. Medir 200.000 y un millón de ventas sin falsear la conclusión
 
-<!-- Hoja didáctica 39, ficha imprimible -->
-## 37. Medición experimental honesta
-*Explicación, evidencia y criterio técnico*
+## 14.1. Por qué usamos dos volúmenes de datos
 
-### Concepto y mecanismo
+Con veinte ventas, casi cualquier operación parecerá instantánea en un ordenador moderno. Eso hace difícil observar las diferencias entre planes de acceso. Cargar 200.000 documentos y repetir el experimento con un millón permite comprobar cómo escala el trabajo lógico.
 
-Una prueba rigurosa controla volumen, consultas, proyección, índices existentes y repetición. Plan, throughput y latencia son dimensiones distintas.
+No buscamos dramatizar tiempos ni medir la velocidad máxima de tu ordenador. Queremos observar cómo cambian las cantidades examinadas cuando crece la colección.
 
-Diseña comparaciones controladas: mismo volumen, mismo comando, igual proyección, sin cargas concurrentes y varias ejecuciones. Distingue medición de laboratorio y SLO de producción. Primero verifica cambio de estructura en explain y reducción de examinados; después mide latencia con suficiente repetición y variabilidad. Si una consulta pasó a IXSCAN pero aumentó claves examinadas, no afirmes automáticamente que mejoró. Presenta incertidumbre y características del hardware.
+## 14.2. Una comparación cuyo resultado tiene significado
 
-### Caso que resuelve
-
-Tres repeticiones de la misma consulta con evidencia. Primero confirmar IXSCAN/COLLSCAN; después comparar órdenes de magnitud.
-
-### Demostración o comprobación
+Elige una consulta por un número situado cerca del final de la colección:
 
 ```javascript
-db.ventas.find({clienteId:809}).explain("executionStats")
+db.ventas.find({numero:199998})
 ```
 
-### Segunda situación para contrastar
+Con 200.000 ventas, ese número existe. Sin un índice secundario por `numero`, MongoDB puede examinar un número grande de documentos. Después creas el índice y repites exactamente la búsqueda.
 
-```javascript
-db.ventas.find({clienteId:809}).explain("executionStats").executionStats.executionTimeMillis
-```
+Para un millón de ventas, debes **elegir un número que pertenezca al nuevo conjunto**, como 999.998. La condición lógica es la misma —buscar una venta concreta por número—, pero no puedes mantener sin pensar un identificador fuera de contexto.
 
-Repetir la medición en frío y en caliente ayuda a ilustrar el efecto de caché, pero no convierte un único milisegundo en una comparación estadística ni sustituye la lectura de los documentos examinados.
+## 14.3. Qué debe registrarse
 
-### Cómo interpretar el resultado
+Una tabla de laboratorio útil incluiría:
 
-Repetir la consulta y controlar volumen distingue una mejora estructural de un simple efecto de caché, plan calentado o carga concurrente.
+| Elemento del experimento | 200.000 ventas | 1.000.000 ventas |
+|---|---|---|
+| Número de documentos cargados | Confirmado por conteo | Confirmado por conteo |
+| Filtro utilizado | Número próximo al final | Número próximo al final |
+| Índice disponible | Sí / no | Sí / no |
+| Plan | COLLSCAN / IXSCAN | COLLSCAN / IXSCAN |
+| Documentos examinados | Medición real | Medición real |
+| Claves examinadas | Medición real | Medición real |
+| Tiempo observado | Dato orientativo | Dato orientativo |
 
-> **Precaución técnica.** No afirmar aceleraciones fijas en distintos equipos.
+El paso de 200.000 a un millón multiplica por cinco el volumen, pero eso no autoriza a afirmar de antemano que todos los tiempos se multiplicarán por cinco. El rendimiento real depende de recursos y de lo que el motor tiene que hacer.
 
-### Comprobación de comprensión
+## 14.4. Errores que invalidan el experimento
 
-¿Qué resultado o evidencia confirmaría el caso «Tres repeticiones de la misma consulta con evidencia.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
+Una comparación deja de ser interpretable si:
+- El conjunto «sin índice» aún conserva el índice de una práctica previa.
+- Se busca un valor ausente y se compara con una búsqueda que sí devuelve documentos.
+- Se cambia la proyección de una ejecución a otra.
+- En una consulta se utiliza un límite y en la otra no.
+- Se comparan ordenadores, discos o condiciones de carga diferentes sin registrarlo.
+- Se promete una aceleración fija a partir de una sola ejecución temporal.
 
+**Una buena práctica puede mostrar que algo NO mejora**, si el índice elegido no se adapta a la consulta o si el coste de obtener muchos resultados domina el trabajo. Eso también es aprendizaje.
 
----
+## 14.5. La evidencia honesta
 
+Para justificar una decisión de índice, presenta una afirmación verificable:
 
-<!-- Hoja didáctica 40, ficha imprimible -->
-## 38. Diseño final: cobertura mínima
-*Explicación, evidencia y criterio técnico*
+> «Para una búsqueda por número que devuelve un documento, la prueba con esta colección y este plan examinó muchos más documentos sin el índice que con el índice. Los tiempos observados son específicos de la ejecución».
 
-### Concepto y mecanismo
+No la sustituyas por una afirmación absoluta:
 
-La selección final de índices es un compromiso. Una sola solución no puede optimizar simultáneamente cualquier filtro, sort y actualización.
+> «Un índice siempre hace que MongoDB sea cientos de veces más rápido».
 
-La propuesta final conecta consultas frecuentes con índices mantenidos. Ejemplo: cliente → {clienteId:1}; pagadas por fecha → {estado:1,fecha:-1}; búsqueda textual → {descripcion:"text"}. Justifica por qué otras necesidades son excepcionales o se atienden de otra forma. Añadir índices sin uso aumenta superficie de mantenimiento. El alumno debe defender tanto lo que crea como lo que decide no crear; es una decisión de arquitectura de acceso a datos.
+La primera se apoya en datos; la segunda ignora el tipo de consulta, el volumen devuelto, la caché y el coste de mantener la estructura.
 
-### Caso que resuelve
+### Caso final de razonamiento
 
-Aplicación con consulta por cliente, ranking por fecha y búsqueda por texto. Elegir un pequeño inventario defendible y registrar qué consulta cubre cada índice.
-
-### Demostración o comprobación
-
-```javascript
-db.ventas.getIndexes().map(x=>({nombre:x.name,claves:x.key}))
-```
-
-### Segunda situación para contrastar
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-En el diagnóstico final el alumno debe conservar una tabla con dos diseños alternativos y defender uno; no basta con afirmar que la consulta ahora «va más rápida».
-
-### Cómo interpretar el resultado
-
-La solución final debe mapear cada índice conservado a uno o varios patrones frecuentes y justificar índices descartados por coste de escritura.
-
-> **Precaución técnica.** Más índices no significa un sistema mejor.
-
-### Comprobación de comprensión
-
-¿Qué resultado o evidencia confirmaría el caso «Aplicación con consulta por cliente, ranking por fecha y búsqueda por texto.»? Justifica la respuesta contrastándolo con la segunda situación. Identifica qué parte depende del diseño de datos, cuál de los índices o permisos y cuál requiere medición.
-
-
----
+Una tienda necesita consultar una venta exacta, listar ventas de un estado ordenadas por fecha, buscar texto en descripciones y encontrar puntos próximos. Explica por qué sería incorrecto resolver los cuatro problemas mediante un único índice `{numero:1}`. Propón el tipo de índice que estudiarías para cada uno y cómo comprobarías su utilidad antes de desplegarlo.

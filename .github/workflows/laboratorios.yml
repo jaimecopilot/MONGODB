@@ -3,6 +3,13 @@ on:
   push:
     branches: [main, laboratorio/github-actions, docs/auditoria-manuales]
   pull_request:
+    paths:
+      - "lab/**"
+      - "compose.yaml"
+      - ".env.example"
+      - "scripts/generar-certificados.sh"
+      - "scripts/probar-seguridad.sh"
+      - ".github/workflows/laboratorios.yml"
   workflow_dispatch:
 permissions:
   contents: read
@@ -100,5 +107,34 @@ jobs:
         if: failure()
         run: docker compose logs --tail=120 mongo-indices
       - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  indices_compuestos_guiados:
+    name: "Indices compuestos - laboratorio pedagogico ESR/ERS"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MONGO_ADMIN_PASSWORD: clave-efimera-docente-ci
+    steps:
+      - uses: actions/checkout@v5
+      - name: Iniciar MongoDB Community
+        run: docker compose up -d --wait mongo-indices
+      - name: Cargar 200000 ventas e indices de la primera practica
+        run: |
+          docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
+          docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
+      - name: Verificar indices compuestos ESR y ERS
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_guiado.js
+      - name: Verificar indice unico parcial y cambios de estado
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/17_partial_unique_guiado.js
+      - name: Verificar ejercicios adicionales de los manuales
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/18_validar_practicas_adicionales.js
+      - name: Comprobar ejemplos complementarios de los manuales
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/22_pruebas_de_practicas.js
+      - name: Diagnosticar errores
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
+      - name: Apagar contenedores
         if: always()
         run: docker compose down --volumes --remove-orphans

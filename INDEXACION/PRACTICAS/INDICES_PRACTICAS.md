@@ -1,2854 +1,2637 @@
-# MongoDB 8.0 · INDICES PRACTICAS
+# Prácticas de índices — MongoDB 8.0
+## Laboratorio 1 — Una misma venta, dos formas de encontrarla
 
+**Objetivo:** encontrar una venta concreta entre 200.000 documentos, medir la búsqueda sin índice y repetirla después de crearlo. Si nunca has utilizado Docker ni `mongosh`, puedes seguir los pasos sin adivinar qué consola utilizar.
 
-<!-- Hoja didáctica 1, ficha imprimible -->
-## Indexación
-*Cuaderno de laboratorios*
+### Antes de empezar: las tres piezas del laboratorio
 
-Fichas con órdenes, pruebas negativas, explicaciones causales y espacio para resultados.
+- **Terminal:** PowerShell en Windows o Terminal en macOS/Linux. Aquí se escriben las órdenes `docker compose`.
+- **Contenedor:** entorno aislado que ejecuta MongoDB. En este curso el servicio se llama `mongo-indices`.
+- **mongosh:** consola que interpreta instrucciones de MongoDB. La ejecutaremos *dentro* del contenedor; no tienes que instalarla aparte.
 
+Trabajaremos solo con documentos sintéticos; el archivo de carga **borra y recrea** la colección `curso_indices.ventas`. No uses estos scripts sobre bases de datos personales o empresariales.
 
+### Paso 1 — Descargar el proyecto
 
-**Entorno del curso:** el [repositorio MongoDB](https://github.com/jaimecopilot/MONGODB) contiene `compose.yaml` y los scripts de `lab/`. Ejecuta los pasos en el orden indicado, prepara los datos necesarios y contrasta lo que observas con el resultado explicado.
+Abre https://github.com/jaimecopilot/MONGODB, pulsa **Code → Download ZIP** y descomprímelo. Abre PowerShell o Terminal en su carpeta principal. Debes ver `compose.yaml` y `.env.example`. Si no los ves, probablemente has abierto una carpeta equivocada. En PowerShell puedes comprobarlo con `Get-ChildItem`; en Bash, con `ls`.
 
----
+### Paso 2 — Preparar las variables locales
 
-
-<!-- Hoja didáctica 2, ficha imprimible -->
-## Antes del primer laboratorio
-*Mapa de ejecución sin improvisaciones*
-
-### Equipamiento y entorno
-
-- Equipo de 8 GB RAM como referencia, Docker Desktop activo, terminal PowerShell o Bash, espacio libre suficiente para los volúmenes y conexión para descargar mongo:8.0.
-
-- MongoDB Community 8.0 y mongosh vienen dentro de las imágenes; Compass es opcional. No se exige licencia Enterprise para los ejercicios esenciales.
-
-### Preparación del formador
+En PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-# Edita .env antes de iniciar los servicios.
-docker compose up -d --wait mongo-indices mongo-seguridad
+```
+
+En macOS/Linux:
+
+```bash
+cp .env.example .env
+```
+
+Abre `.env` y cambia `MONGO_ADMIN_PASSWORD` por una contraseña **solo para este laboratorio**. Aunque el servidor de índices no requiera autenticación, Docker Compose procesa la configuración de los otros servicios. No publiques `.env`.
+
+### Paso 3 — Arrancar MongoDB
+
+En la **terminal de tu ordenador**, no en MongoDB:
+
+```bash
+docker compose up -d --wait mongo-indices
 docker compose ps
 ```
 
-### Dos contextos distintos
+`up` crea o inicia el contenedor; `-d` lo deja funcionando en segundo plano; `--wait` comprueba que esté listo. La lista de `docker compose ps` debería mostrar `mongo-indices` en ejecución.
 
-La terminal del sistema ejecuta docker compose; mongosh ejecuta consultas y administración MongoDB. Si una instrucción inicia con use curso_indices o db., se escribe dentro del shell de MongoDB, nunca en PowerShell.
+**Si Docker no responde:** abre Docker Desktop y comprueba que esté iniciado. Si recibes un mensaje de puerto ocupado, puede existir otro MongoDB local en el puerto 27017. No detengas servicios desconocidos: consulta al formador.
 
-### Normas de reproducibilidad
+### Paso 4 — Crear 200.000 ventas
 
-Los scripts del paquete contienen datos de laboratorio exclusivamente. Las operaciones que borran ventas o colecciones demo están identificadas. Al repetir una carga, se pierden los índices secundarios de la colección reinicializada. No ejecutarlos sobre servidores externos ni entornos con datos propios.
-
-PREPARAR → EJECUTAR → OBSERVAR → EXPLICAR
-
-### Ruta esencial de tres horas
-
-Indexación: carga, línea base, índice simple, comparación, compuesto ESR, text y TTL. Seguridad: conexión anónima rechazada, login SCRAM, cuenta read, denegación insert y explicación TLS/X.509/LDAP. Los demás laboratorios forman itinerario de ampliación, no se prometen todos dentro de los 180 minutos.
-
-> Si el formador no tiene Docker listo previamente, el tiempo de descarga y carga de datos puede consumir la sesión. Ejecutar un ensayo completo en el equipo y conservar la salida antes de impartir.
-
-
----
-
-
-<!-- Hoja didáctica 3, ficha imprimible -->
-## Laboratorio 01 · Preparación de Docker y aislamiento
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Servicios mongo-indices y mongo-seguridad presentes; comprobar puertos 127.0.0.1.
-
-### Dónde ejecutar y con qué preparación
-
-Terminal PowerShell/Bash. Este paso solo inspecciona contenedores y no exige entrar en mongosh.
-
-### Ejecutar desde terminal (PowerShell/Bash)
-
-```powershell
-docker compose ps
-```
-
-### Precondición que cambia la interpretación
-
-Antes de indexar, asegúrate de que ventas acaba de cargarse y solo contiene _id_ como índice.
-
-### Evidencia concreta a registrar
-
-Servicios mongo-indices y mongo-seguridad presentes; comprobar puertos 127.0.0.1. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Si Docker no responde, arrancar Docker Desktop antes de cambiar comandos.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 4, ficha imprimible -->
-## Laboratorio 01 · Preparación de Docker y aislamiento
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-En docker compose ps distingue nombre del servicio, estado y redirección de puertos. La ausencia de IP antes de 27017 podría publicar en interfaces externas del host: revisa siempre el fichero Compose. La instancia libre es únicamente un experimento local y no contiene datos privados.
-
-### Por qué ocurre
-
-Piensa en el registro de una tienda: pedir una factura por numero no debería obligar a abrir cada carpeta. Si existen 200.000 ventas y el filtro devuelve una, la lectura secuencial puede examinar del orden de 200.000 documentos. Esa desproporción es más informativa que un tiempo aislado. El plan puede incluir otras etapas; hay que mirar el árbol entero. Para obtener una línea de base limpia ejecuta la medición ANTES de crear índices secundarios y conserva el tamaño de la colección. Una vez instalado un índice específico, repite exactamente el mismo filtro, proyección y límite.
-
-### Qué no permite concluir
-
-Si Docker no responde, arrancar Docker Desktop antes de cambiar comandos. Con solo _id_ disponible, el filtro numero o clienteId no dispone de acceso secundario selectivo; normalmente los documentos examinados se acercarán al tamaño completo.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({numero:25001}).limit(1).explain("executionStats")
-```
-
-La presencia de limit(1) no elimina el recorrido previo de documentos hasta localizar la operación. Compara el número examinado con una consulta por _id y razona qué estructura necesitaría numero.
-
-### Ejercicio de transferencia
-
-Describir por qué la instancia sin autenticación no debe ser accesible desde la red.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar servicios mongo-indices y mongo-seguridad presentes; comprobar puertos 127.0.0.1. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 5, ficha imprimible -->
-## Laboratorio 02 · Carga repetible de datos
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-200000 documentos por defecto, o 1000000 con VENTAS; registrar volumen exacto.
-
-### Dónde ejecutar y con qué preparación
-
-Primero la terminal para cargar datos. Después entra en mongosh del contenedor mongo-indices para contarlos.
-
-### Paso 1 · Terminal del host
-
-```powershell
+```bash
 docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
 ```
 
-### Paso 2 · Shell mongosh
+La instrucción `exec` entra en un contenedor que ya existe. `VENTAS=200000` indica la cantidad de registros. `--file` indica a `mongosh` qué script ejecutar. La carpeta `/lab` está **dentro del contenedor** y corresponde a la carpeta `lab` del proyecto.
 
-```javascript
-use curso_indices
-db.ventas.countDocuments({})
+Espera a que aparezca la confirmación final. Puedes comprobar el número de registros con:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'db.getSiblingDB("curso_indices").ventas.countDocuments({})'
 ```
 
-### Precondición que cambia la interpretación
+**Resultado esperado:** `200000`. Si obtienes cero, vuelve a leer los mensajes de la carga antes de continuar.
 
-Antes de indexar, asegúrate de que ventas acaba de cargarse y solo contiene _id_ como índice.
+### Paso 5 — Ver que la venta existe
 
-### Evidencia concreta a registrar
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({numero:199998}))'
+```
 
-200000 documentos por defecto, o 1000000 con VENTAS; registrar volumen exacto. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+Debe aparecer un documento con `numero: 199998`. ¿Por qué hemos hecho esto? Para separar dos preguntas: **¿es correcto el resultado?** y **¿cuánto cuesta obtenerlo?**. La primera ya tiene respuesta. Ahora investigaremos la segunda.
 
-> **Si no obtienes el resultado:** La carga borra curso_indices.ventas, por eso cada alumno trabaja en entorno local aislado.
+### Paso 6 — Medir ANTES del índice
 
-**Hoja para registrar salida real y conclusión**
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
+```
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+Este script se niega a trabajar si ya existen índices secundarios, para que no confundas un resultado preparado de antemano con la línea base.
+
+Busca en su salida `COLLSCAN` y los contadores `nReturned`, `totalDocsExamined` y `totalKeysExamined`. Escribe los valores:
+
+- Documentos encontrados: ______
+- Documentos examinados: ______
+- Claves examinadas: ______
+- Etapa de búsqueda: ______
+
+**Interpretación esperada:** encontrar una venta puede requerir examinar una parte enorme de la colección. No supongas que `nReturned=1` significa «se leyó un documento».
+
+### Paso 7 — Crear el índice
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
+```
+
+Este script crea `ix_numero`, un índice único ascendente sobre `numero`, además de otros índices que servirán para clases posteriores. La instrucción esencial que aprenderemos es:
+
+```javascript
+db.ventas.createIndex({numero:1},{name:"ix_numero",unique:true})
+```
+
+`unique` exige que los números no se repitan. Esa restricción protege la integridad y es distinta del beneficio de búsqueda.
+
+### Paso 8 — Medir DESPUÉS del índice
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/04_despues.js
+```
+
+Compara la salida con el paso 6. El script verificará que ahora la búsqueda por `numero` examina un documento. En el plan debes poder identificar `IXSCAN`.
+
+| Dato | Antes | Después |
+|---|---|---|
+| Documentos encontrados | ___ | ___ |
+| Documentos examinados | ___ | ___ |
+| Claves examinadas | ___ | ___ |
+| Plan predominante | ___ | ___ |
+
+**Pregunta esencial:** si devolvemos la misma venta, ¿qué hemos ganado? Respuesta: podemos haber reducido enormemente el esfuerzo de localización. Los milisegundos son orientativos y dependen del ordenador.
+
+### Paso 9 — Si algo no coincide
+
+- `02_antes.js` informa de índices previos: ejecutaste el laboratorio antes. Repite el paso 4 para recuperar una colección sin índices; recuerda que la carga borra datos docentes e índices secundarios.
+- No aparece el documento: comprueba que cargaste 200.000 ventas y buscaste por `numero`, sin tilde.
+- `04_despues.js` falla: comprueba que completaste el paso 7 y que utilizas el mismo servicio `mongo-indices`.
+- Error de conexión: ejecuta `docker compose ps` y después `docker compose logs --tail=80 mongo-indices`.
+
+### Paso 10 — Conclusión y cierre
+
+Escribe tres frases: (1) qué consulta hiciste; (2) qué trabajo realizó antes del índice; (3) qué cambió después. No basta con afirmar «el índice es más rápido».
+
+Cuando termines:
+
+```bash
+docker compose stop mongo-indices
+```
+
+Este comando detiene el contenedor. No uses `docker compose down --volumes` salvo que quieras destruir los datos y volúmenes del laboratorio.
+
+**Autoevaluación:** ¿qué ocurriría si ejecutaras la carga del paso 4 después de haber creado el índice? ¿Por qué es importante respetar el orden de esta práctica?
 
 
 ---
 
+# Laboratorio 2 — Índices compuestos, orden de campos y ESR
 
-<!-- Hoja didáctica 6, ficha imprimible -->
-## Laboratorio 02 · Carga repetible de datos
-*Solución comentada y ampliación*
+## Qué vamos a hacer
 
-### Solución razonada
+La persona responsable de ventas quiere **las diez ventas pagadas más recientes que superan los 500 euros**. Nuestra tarea no es copiar índices al azar. Vamos a escribir la consulta, comprobar que los resultados cumplen el encargo, elegir dos índices candidatos y comparar el trabajo real que exigen.
 
-Comprueba countDocuments y observa que el índice inicial _id_ existe incluso en una colección recién recreada. El generador borra exclusivamente curso_indices.ventas antes de escribir; ejecutarlo de nuevo anula índices y mediciones posteriores. Para un millón de documentos usa VENTAS=1000000 y registra el mayor coste de carga.
+**Duración:** esta actividad no está limitada a una cifra fija de minutos. Avanza cuando hayas comprendido el resultado de cada paso.
 
-### Por qué ocurre
+### Requisitos y advertencias
 
-En el generador, estado tiene cuatro valores y clienteId recorre 20.000 valores. Para 200.000 ventas caben aproximadamente 50.000 documentos en el primer filtro y diez en el segundo, porque la distribución es determinista. Un índice sobre estado no es necesariamente inútil: puede aportar la ordenación de una consulta compuesta o reducir el trabajo si solo se proyectan campos indexados. Para elegir, compara consultas reales, no etiquetas simplistas como «alta cardinalidad = bueno».
+Debes tener el repositorio del curso en tu ordenador, Docker en funcionamiento y la instancia `mongo-indices` preparada.
 
-### Qué no permite concluir
+Esta práctica **continúa la anterior**: allí cargaste 200.000 ventas y ejecutaste `03_crear_indices.js`. Si acabas de empezar en un entorno limpio, abre la práctica 1 y sigue sus pasos de preparación, carga y creación de índices **antes** de continuar.
 
-La carga borra curso_indices.ventas, por eso cada alumno trabaja en entorno local aislado. Con estado de cuatro valores puede ser razonable un escaneo extenso; con numero casi único, leer un tramo corto tiene una ventaja más clara.
+**Nunca vuelvas a ejecutar `01_cargar_ventas.js` a mitad de esta práctica**: borrarías la colección y perderías sus índices, cambiando el experimento.
 
-### Contraste resuelto con un segundo escenario
+## PASO 1 — Comprobar que estamos trabajando en el lugar correcto
 
-```javascript
-db.ventas.countDocuments({estado:"pagada"})
-db.ventas.countDocuments({clienteId:809})
+Abre PowerShell, Terminal o Bash **en la carpeta del repositorio** y ejecuta:
+
+```bash
+docker compose ps
 ```
 
-La diferencia de órdenes de magnitud entre las dos cuentas muestra qué predicado discrimina más. Repite con un volumen distinto: las proporciones siguen siendo sintéticas y no describen necesariamente una empresa.
+Debes ver el servicio `mongo-indices` en ejecución. Si está detenido:
 
-### Ejercicio de transferencia
+```bash
+docker compose up -d --wait mongo-indices
+```
 
-Anotar RAM y tiempo de carga para explicar diferencias entre equipos.
+No necesitas entrar a mano en `mongosh` para estos primeros pasos: pasaremos expresiones mediante `--eval` desde la terminal.
 
-### Criterio de corrección de esta práctica
+Comprueba el número de ventas:
 
-La corrección del ejercicio exige acreditar 200000 documentos por defecto, o 1000000 con VENTAS; registrar volumen exacto. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'db.getSiblingDB("curso_indices").ventas.countDocuments({})'
+```
 
-**Diario de comparación / conclusión**
+**Resultado esperado:** `200000` si mantuviste la carga de la primera práctica. Si aparece cero, aún no hay datos. Si aparece otro número que tú preparaste, puedes continuar, pero no compares tus cifras absolutas con las de un compañero con 200.000 ventas.
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+## PASO 2 — Confirmar que los campos existen
+
+Pide a MongoDB un documento de ejemplo:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({estado:"pagada"}))'
+```
+
+Localiza `estado`, `fecha` e `importe`. Observa que:
+
+- `estado` es una cadena con valores como `pagada`.
+- `fecha` es una fecha almacenada como tipo fecha.
+- `importe` es numérico, de modo que podemos hacer comparaciones mayores/menores.
+
+**No avances si alguno de esos campos no aparece**: puede que estés en otra base de datos o que uses un conjunto de documentos diferente.
+
+## PASO 3 — Traducir el pedido de negocio a una consulta
+
+El encargo tiene cuatro partes:
+
+| Requisito | Expresión MongoDB |
+|---|---|
+| Solo pagadas | `estado:"pagada"` |
+| Importe superior a 500 | `importe:{$gt:500}` |
+| Más recientes primero | `sort({fecha:-1})` |
+| Solo diez | `limit(10)` |
+
+Para no confundir la consulta con el comando de Docker, la ejecutaremos como archivo en el paso siguiente. Antes, intenta leer mentalmente esta expresión:
+
+```javascript
+db.ventas
+  .find({estado:"pagada",importe:{$gt:500}})
+  .sort({fecha:-1})
+  .limit(10)
+```
+
+Si dices «busca todas las ventas y luego imprime las que quiera», todavía falta precisión: la consulta filtra por **dos condiciones** y ordena antes de limitar.
+
+## PASO 4 — Contar cuántas ventas cumplen las condiciones
+
+Ejecuta en tu terminal:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({estado:"pagada",importe:{$gt:500}}))'
+```
+
+La cifra representa todas las ventas pagadas que superan el umbral. **No tienen por qué ser solo diez**: el límite de diez se aplica después, cuando pidamos una lista de las más recientes.
+
+Escribe el número obtenido: __________.
+
+¿Por qué hacemos esta comprobación? Si apenas hubiera tres documentos que cumplen la condición, elegir un índice para ordenar millones de candidatos sería una preocupación muy distinta a la de una colección con miles de coincidencias.
+
+## PASO 5 — Reconocer el índice que ya existe
+
+El archivo `lab/03_crear_indices.js` crea, entre otros, este índice:
+
+```javascript
+{estado:1,fecha:-1,importe:1}
+```
+
+Su nombre en nuestro proyecto es `ix_esr`. Comprueba su existencia:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(x=>x.name==="ix_esr"))'
+```
+
+Deberías ver una definición que contiene `estado`, `fecha` e `importe`, en ese orden. Si la salida es `[]`, el índice no existe. Vuelve a los pasos de la práctica anterior: probablemente no ejecutaste `03_crear_indices.js` o recargaste después las ventas.
+
+## PASO 6 — Comparar orden ESR y ERS
+
+Vamos a utilizar un script nuevo:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_guiado.js
+```
+
+**Antes de ejecutarlo**, comprende qué hará:
+
+1. Verificará que existe la colección y el índice `ix_esr`.
+2. Creará el índice alternativo `ix_ers_practica` con `{estado:1,importe:1,fecha:-1}`.
+3. Ejecutará **la misma consulta** dos veces, una obligando a usar cada índice mediante `hint`.
+4. Comprobará que ambas variantes devuelven diez ventas que cumplen los filtros y que las fechas están ordenadas de manera descendente. Si varias ventas comparten fecha, **los identificadores concretos pueden variar legítimamente**: la consulta no ha establecido cómo resolver los empates.
+5. Imprimirá un resumen de `executionStats` para poder comparar el trabajo efectuado.
+
+El script no borra las ventas. Añade un índice de laboratorio, que puedes consultar o eliminar más tarde.
+
+### Cómo leer el resultado
+
+Busca dos bloques etiquetados `ESR` y `ERS`. En cada uno anota:
+
+| Dato | ESR | ERS |
+|---|---:|---:|
+| `nReturned` | ____ | ____ |
+| `totalDocsExamined` | ____ | ____ |
+| `totalKeysExamined` | ____ | ____ |
+| ¿Aparece una etapa `SORT`? | ____ | ____ |
+| `executionTimeMillis` | ____ | ____ |
+
+**Importante:** no te he dado números fijos de tiempo; no sería riguroso prometerlos. Los valores obtenidos son los de tu ejecución, no una puntuación a aprobar.
+
+## PASO 7 — Entender la diferencia sin memorizar la sigla
+
+El índice ESR agrupa primero por `estado`, dentro de ese grupo organiza `fecha` en orden descendente y deja `importe` como tercera clave. Eso facilita recuperar documentos ya ordenados por fecha cuando conoces el estado, aunque el rango de importes no se pueda reducir tan eficazmente como cuando aparece antes.
+
+El índice ERS agrupa por `estado` y después por `importe`. Puede localizar un rango de importes más directamente, pero el orden global por `fecha` entre distintos importes puede requerir una ordenación adicional.
+
+**Pregunta clave:** ¿cuál ha examinado menos claves? ¿Cuál evita una operación de ordenación adicional? ¿Es el mismo índice el mejor en ambas métricas? Elige según los datos y el uso, no según un eslogan.
+
+## PASO 8 — Comprobar que ningún índice ha cambiado la respuesta
+
+El script confirma que **ambas variantes obedecen la consulta**: diez ventas pagadas, con importe superior a 500, en orden descendente de fecha.
+
+¿Por qué importa esa comprobación? Porque una optimización **no puede cambiar el significado de la consulta**. Debe seguir representando «diez ventas pagadas de más de 500 euros, ordenadas de más reciente a más antigua». Eso no garantiza que el límite seleccione los mismos identificadores entre ventas empatadas en fecha.
+
+**Sutileza importante:** varias ventas pueden compartir exactamente la misma fecha. `sort({fecha:-1})` no especifica qué venta debe aparecer primero dentro de un empate. Si los dos planes eligen documentos diferentes con la misma fecha límite, eso no demuestra pérdida de datos ni un error de índice. Para un orden total estable podrías pedir `sort({fecha:-1,numero:1})`, pero entonces también tendrías que estudiar índices que incluyan ese segundo campo de ordenación. Lo haremos en una práctica posterior.
+
+## PASO 9 — Errores habituales
+
+- **El script dice que falta `ix_esr`:** ejecuta la práctica anterior hasta el paso de creación de índices.
+- **Dice que no hay ventas:** completa la carga de datos; no crees índices sobre una colección vacía fingiendo un experimento de 200.000 registros.
+- **Aparece otra cantidad de resultados:** comprueba el estado y el filtro por importe, y que consultaste el servidor correcto.
+- **Hay una operación `SORT` en ERS:** no es un fallo del script; es precisamente una característica posible del plan.
+- **El tiempo cambia al repetirlo:** es normal; por eso usamos también los contadores de documentos y claves.
+- **Falló la creación del índice:** revisa el texto del error y el espacio disponible. No borres todos los índices ni la colección para solucionar un error que no comprendes.
+
+## PASO 10 — Retomar el control
+
+Al terminar, puedes examinar los dos índices:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(x=>["ix_esr","ix_ers_practica"].includes(x.name)))'
+```
+
+No borres `ix_esr` porque forma parte de los ejercicios siguientes. Si deseas eliminar exclusivamente el índice creado para la comparación:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'db.getSiblingDB("curso_indices").ventas.dropIndex("ix_ers_practica")'
+```
+
+Después puedes detener `mongo-indices` con `docker compose stop mongo-indices`. Si vas a continuar, déjalo funcionando.
+
+## Actividad de comprensión
+
+Explica, con un ejemplo de tus ventas, cómo responderías a alguien que afirma:
+
+> «Siempre hay que poner primero el campo más selectivo y dejar la fecha al final».
+
+Tu respuesta debe distinguir igualdad, rango, ordenación y el volumen de candidatos. No se acepta como justificación repetir simplemente «porque lo dice ESR».
+
+**Siguiente tema:** un índice multikey para un campo que contiene una lista de etiquetas, y por qué ese índice es distinto de uno sobre un valor escalar.
 
 
 ---
 
+# Laboratorio 3 — Buscar etiquetas de ventas y palabras dentro de descripciones
 
-<!-- Hoja didáctica 7, ficha imprimible -->
-## Laboratorio 03 · Inspeccionar estructura y distribución
-*Ejecución paso a paso*
+## Qué aprenderás y por qué importa
 
-### Resultado profesional perseguido
+La primera práctica localizaba una venta mediante un número. Pero una tienda también puede pedir «todas las ventas etiquetadas como urgentes» o «descripciones que hablen de café». Son problemas distintos de la búsqueda exacta por número.
 
-Identificar filtros de alta y baja cardinalidad y tipo BSON de fecha.
+El objetivo es comprender cómo MongoDB busca valores dentro de arrays, qué significa un índice multikey y por qué un índice de texto clásico no equivale a buscar un campo por igualdad.
 
-### Dónde ejecutar y con qué preparación
+### Paso 1. Verificar datos y conexión
 
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
+Abre PowerShell o Bash dentro de la carpeta del repositorio. Si detuviste MongoDB:
 
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
+```bash
+docker compose up -d --wait mongo-indices
 ```
 
-### Paso 2 · Seleccionar base y ejecutar
+Comprueba que la colección `curso_indices.ventas` contiene datos:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({}))'
+```
+
+Si devuelve cero, vuelve a la primera práctica y carga las ventas ficticias. No continúes interpretando una búsqueda sobre datos inexistentes.
+
+### Paso 2. Observar qué significa tener un array
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({numero:1}))'
+```
+
+Localiza la propiedad `etiquetas`. En el conjunto sintético tiene varios valores, por ejemplo una etiqueta general y otra que indica si la venta procede de la web. Algunos documentos incluyen `urgente`.
+
+**Pregunta previa:** ¿crees que `etiquetas` es una cadena única como `"web,urgente"` o una lista de valores separados? La diferencia es importante: MongoDB reconoce sus elementos como valores independientes dentro de un array.
+
+### Paso 3. Consultar un valor contenido en la lista
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({etiquetas:"urgente"}))'
+```
+
+La consulta no pide que el array sea exactamente igual a `"urgente"`. Pide documentos donde ese valor aparezca como elemento del campo array. Anota el número de coincidencias: ______.
+
+### Paso 4. Verificar que existe el índice multikey
+
+En la primera práctica, `03_crear_indices.js` creó `ix_etiquetas`:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes().filter(i=>i.name==="ix_etiquetas"))'
+```
+
+Deberías observar la clave `etiquetas:1`. Como el campo contiene arrays en nuestros documentos, el índice funciona como multikey.
+
+Ahora ejecuta una consulta forzando el índice **solo para estudiar el plan**:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.find({etiquetas:"urgente"}).hint("ix_etiquetas").limit(3).explain("executionStats").executionStats)'
+```
+
+Busca `nReturned`, `totalDocsExamined` y `totalKeysExamined`. Pueden existir más claves que resultados: los arrays contribuyen a las entradas del índice. No confundas eso con documentos duplicados almacenados.
+
+### Paso 5. Comprender por qué dos condiciones pueden pertenecer a elementos diferentes
+
+Imagina la siguiente venta:
 
 ```javascript
-use curso_indices
-db.ventas.findOne()
-db.ventas.distinct("estado")
+{
+  productos: [
+    { sku: "SKU10", cantidad: 1 },
+    { sku: "SKU20", cantidad: 3 }
+  ]
+}
 ```
 
-### Precondición que cambia la interpretación
+Si buscamos por `productos.sku:"SKU10"` y `productos.cantidad:3` como dos condiciones independientes, cada condición puede satisfacerse en elementos distintos de ese array.
 
-Antes de indexar, asegúrate de que ventas acaba de cargarse y solo contiene _id_ como índice.
+Para expresar que **el mismo elemento** debe tener ambas propiedades, usamos:
 
-### Evidencia concreta a registrar
+```javascript
+{
+  productos: {
+    $elemMatch: { sku: "SKU10", cantidad: 3 }
+  }
+}
+```
 
-Identificar filtros de alta y baja cardinalidad y tipo BSON de fecha. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+**La segunda consulta no debería encontrar el documento mostrado**, porque el producto SKU10 tiene cantidad 1 y no 3. Este ejemplo demuestra una diferencia de significado, no simplemente un truco para optimizar rendimiento.
 
-> **Si no obtienes el resultado:** No confundir una distribución determinista docente con una muestra estadística real.
+### Paso 6. Probar la distinción sin alterar las ventas
 
-**Hoja para registrar salida real y conclusión**
+Este experimento utiliza una colección temporal diferente de `ventas`. Entra en `mongosh`:
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de `mongosh` introduce estas instrucciones de una en una:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.productos_ejemplo.drop();
+d.productos_ejemplo.insertOne({
+  _id: 1,
+  productos: [
+    {sku:"SKU10",cantidad:1},
+    {sku:"SKU20",cantidad:3}
+  ]
+});
+```
+
+La llamada `drop()` elimina **solo la colección de prueba `productos_ejemplo`**. No afecta a `ventas`. Ahora comprueba:
+
+```javascript
+d.productos_ejemplo.find({
+  "productos.sku":"SKU10",
+  "productos.cantidad":3
+}).toArray()
+```
+
+Observa que la primera consulta puede encontrar el documento: la existencia de SKU10 y la existencia de cantidad 3 se verifican sin obligar a que correspondan al mismo elemento.
+
+Después:
+
+```javascript
+d.productos_ejemplo.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).toArray()
+```
+
+El resultado debe ser un array vacío. **Si entiendes por qué las salidas difieren, ya has comprendido la razón de utilizar `$elemMatch`.**
+
+Puedes salir de `mongosh` escribiendo `exit`.
+
+### Paso 7. Pasar de etiquetas a palabras de una descripción
+
+Ahora queremos buscar ventas cuya descripción incluya el término `cafe`. No lo buscamos como valor exacto del campo completo.
+
+Comprueba primero que hay descripciones de café:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.findOne({descripcion:"cafe premium en grano"}))'
+```
+
+La primera práctica crea también un índice de tipo `text` sobre `descripcion`. Comprueba su existencia mediante `getIndexes()` antes de utilizar el operador `$text`.
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({$text:{$search:"cafe"}}))'
+```
+
+**Resultado esperado:** una cifra positiva. MongoDB busca el término mediante el mecanismo de búsqueda textual clásico. Esto no es lo mismo que `find({descripcion:"cafe"})`, que busca igualdad del valor completo.
+
+### Paso 8. Interpretar una puntuación textual
+
+Si quieres observar la puntuación de coincidencia:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.find({$text:{$search:"cafe"}},{descripcion:1,score:{$meta:"textScore"}}).sort({score:{$meta:"textScore"}}).limit(3).toArray())'
+```
+
+Busca `descripcion` y `score`. La puntuación sirve para ordenar relevancia textual según el mecanismo disponible; **no es una nota de calidad humana ni un porcentaje de certeza**.
+
+### Paso 9. Resolver errores sin improvisar
+
+- **El operador `$text` dice que falta índice:** todavía no has ejecutado `03_crear_indices.js`, o recargaste ventas posteriormente.
+- **`getIndexes()` devuelve solo `_id_`:** estás en la línea base de la primera práctica. Crea primero los índices.
+- **La búsqueda de café devuelve cero:** examina una descripción real y revisa la configuración de idioma del índice; no supongas que cualquier búsqueda literal funciona igual.
+- **`$elemMatch` no devuelve el documento:** en este ejemplo es el resultado correcto, no un error de MongoDB.
+
+### Tu explicación final
+
+Redacta por qué estas tres consultas no son equivalentes:
+
+```javascript
+{ etiquetas: "urgente" }
+{ descripcion: "cafe" }
+{ $text: { $search: "cafe" } }
+```
+
+Y explica qué diferencia de significado introduce `$elemMatch` cuando el campo contiene documentos anidados en un array.
+
+---
+
+# Laboratorio 4 — Distancias, coordenadas e índice hashed
+
+## Propósito
+
+La empresa tiene puntos de entrega y quiere responder «¿cuáles están cerca de esta dirección?». También necesita recuperar rápidamente ventas de un grupo concreto mediante una consulta por igualdad.
+
+A primera vista ambos problemas parecen búsquedas, pero requieren estructuras distintas: `2dsphere` para determinadas consultas geográficas y `hashed` para igualdad sobre un valor transformado.
+
+### Paso 1. Preparar los datos
+
+En la terminal de tu ordenador:
+
+```bash
+docker compose up -d --wait mongo-indices
+```
+
+Abre `mongosh` dentro del contenedor:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+A partir de este punto, los fragmentos JavaScript se escriben dentro de `mongosh`, no en PowerShell.
+
+### Paso 2. Crear tres ubicaciones conocidas
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.puntos_entrega_clase.drop();
+d.puntos_entrega_clase.insertMany([
+  {
+    nombre:"Sol",
+    ubicacion:{type:"Point",coordinates:[-3.7038,40.4168]}
+  },
+  {
+    nombre:"Retiro",
+    ubicacion:{type:"Point",coordinates:[-3.6833,40.4153]}
+  },
+  {
+    nombre:"Barcelona",
+    ubicacion:{type:"Point",coordinates:[2.1700,41.3800]}
+  }
+]);
+```
+
+`drop()` borra exclusivamente la colección de ejemplo `puntos_entrega_clase`. Las coordenadas están escritas como **longitud primero, latitud después**. Son puntos aproximados utilizados para explicar la consulta; no constituyen una aplicación de navegación real.
+
+### Paso 3. Crear el índice apropiado
+
+```javascript
+d.puntos_entrega_clase.createIndex(
+  {ubicacion:"2dsphere"},
+  {name:"ix_puntos_esfera"}
+);
+```
+
+El término `2dsphere` declara el tipo geoespacial adecuado para la geometría usada. Es diferente de un índice normal `{ubicacion:1}`, que no comprende por sí solo las operaciones sobre puntos terrestres.
+
+### Paso 4. Buscar puntos próximos
+
+```javascript
+d.puntos_entrega_clase.find({
+  ubicacion:{
+    $near:{
+      $geometry:{
+        type:"Point",
+        coordinates:[-3.7038,40.4168]
+      },
+      $maxDistance:3500
+    }
+  }
+}).toArray()
+```
+
+Léela de fuera hacia dentro: buscar documentos, filtrar por ubicación cercana a un punto de referencia y exigir una distancia máxima aproximada de 3.500 metros.
+
+**Resultado esperado:** Sol y Retiro; no Barcelona. Si la consulta encuentra también Barcelona, examina si intercambiaste las coordenadas o utilizaste una distancia absurda.
+
+### Paso 5. Demostrar qué problema NO resuelve el índice
+
+Esta consulta no puede decirte automáticamente qué ruta debe seguir un repartidor, cuánto tráfico existe o cuánto tardará en llegar. El índice ayuda a buscar puntos próximos **geométricamente**. Calcular un trayecto por calles es otra aplicación y necesita otra información.
+
+Anota: ¿qué diferencia hay entre «a 2 km en línea recta» y «a 2 km por carretera»?
+
+### Paso 6. Conocer los índices hashed
+
+La colección de ventas incluye `idGrupo`. El archivo `03_crear_indices.js` añade un índice hashed sobre ese campo. Comprueba que existe:
+
+```javascript
+d.ventas.getIndexes().filter(x=>x.name==="ix_grupo_hash")
+```
+
+Si aparece la definición con `"hashed"`, realiza una búsqueda por igualdad:
+
+```javascript
+d.ventas.find({idGrupo:809}).hint("ix_grupo_hash").limit(3).toArray()
+```
+
+Debes ver ventas cuyo `idGrupo` sea 809. Ahora explica por qué este índice **no está pensado para recorrer de forma ordenada los grupos 800 a 900**: el hash representa valores sin conservar necesariamente su proximidad numérica original.
+
+### Paso 7. Interpretar el plan
+
+```javascript
+d.ventas.find({idGrupo:809})
+  .hint("ix_grupo_hash")
+  .limit(3)
+  .explain("executionStats")
+```
+
+Observa si el plan usa un índice y cuántas claves/documentos examina. `hint` se utiliza en esta demostración para estudiar un índice concreto. No es una recomendación de forzar siempre un acceso en producción.
+
+### Paso 8. Cerrar y justificar
+
+Sal de `mongosh` escribiendo `exit`. Resume:
+- qué pregunta resolvió `2dsphere`;
+- qué significado tienen las coordenadas;
+- qué pregunta resuelve bien `hashed`;
+- por qué ninguna de las dos estructuras sustituye automáticamente a un índice ordenado convencional por número.
+
+**Error habitual:** confundir «hashed» con contraseña cifrada. Un índice hashed organiza claves mediante un cálculo hash; no protege por sí mismo secretos personales.
 
 
 ---
 
+# Laboratorio 5 — Impedir duplicados y caducar sesiones: índices unique y TTL
 
-<!-- Hoja didáctica 8, ficha imprimible -->
-## Laboratorio 03 · Inspeccionar estructura y distribución
-*Solución comentada y ampliación*
+## Dos problemas que no son simplemente «buscar rápido»
 
-### Solución razonada
+La empresa tiene dos necesidades nuevas. Quiere impedir que un mismo correo electrónico aparezca repetido entre las cuentas de un ejercicio, y quiere que ciertos registros de sesión desaparezcan cuando llegue su fecha de caducidad. Son reglas sobre **integridad** y **ciclo de vida de datos**.
 
-Asegúrate de que fecha se representa como Date en MongoDB y no como cadena. Las ventas usan estados de cuatro categorías, regiones de cinco y clientes entre cero y 19999. Una consulta sobre una categoría poco selectiva no desempeña el mismo papel que una búsqueda de un cliente.
+No debemos deducir que todo índice se crea solo para acelerar una consulta. Algunos índices también ayudan a aplicar reglas sobre qué datos pueden existir o cuándo deben eliminarse.
 
-### Por qué ocurre
+### Paso 1. Preparación y consecuencias
 
-En el generador, estado tiene cuatro valores y clienteId recorre 20.000 valores. Para 200.000 ventas caben aproximadamente 50.000 documentos en el primer filtro y diez en el segundo, porque la distribución es determinista. Un índice sobre estado no es necesariamente inútil: puede aportar la ordenación de una consulta compuesta o reducir el trabajo si solo se proyectan campos indexados. Para elegir, compara consultas reales, no etiquetas simplistas como «alta cardinalidad = bueno».
+Abre PowerShell o Bash en la raíz del repositorio. Si la instancia está detenida, arráncala:
 
-### Qué no permite concluir
-
-No confundir una distribución determinista docente con una muestra estadística real. Con estado de cuatro valores puede ser razonable un escaneo extenso; con numero casi único, leer un tramo corto tiene una ventaja más clara.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.countDocuments({estado:"pagada"})
-db.ventas.countDocuments({clienteId:809})
+```bash
+docker compose up -d --wait mongo-indices
 ```
 
-La diferencia de órdenes de magnitud entre las dos cuentas muestra qué predicado discrimina más. Repite con un volumen distinto: las proporciones siguen siendo sintéticas y no describen necesariamente una empresa.
+Este ejercicio utiliza dos colecciones separadas de las ventas principales:
+- `curso_indices.unicidad_demo` para la prueba de duplicados;
+- `curso_indices.sesiones_demo` para probar caducidad.
 
-### Ejercicio de transferencia
+El script que vas a ejecutar borra y recrea esas dos **colecciones didácticas**. No borra `curso_indices.ventas`. Asegúrate de no haber guardado en ellas datos propios que quieras conservar.
 
-Proponer una consulta operacional antes de indexar.
+### Paso 2. Entender la regla de unicidad
 
-### Criterio de corrección de esta práctica
+El correo ficticio `unico@ejemplo.test` debe aparecer una sola vez. Dentro de `mongosh` podríamos crear el índice así:
 
-La corrección del ejercicio exige acreditar identificar filtros de alta y baja cardinalidad y tipo BSON de fecha. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+```javascript
+db.getSiblingDB("curso_indices").unicidad_demo.createIndex(
+  {email:1},
+  {unique:true}
+)
+```
 
-**Diario de comparación / conclusión**
+No significa «el campo email es obligatorio para cualquier aplicación». Significa que MongoDB aplicará la semántica de unicidad de ese índice a los documentos de esa colección. Si el campo puede faltar o ser nulo, el diseño requiere reglas adicionales que estudiaremos por separado.
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+### Paso 3. Ejecutar una prueba que DEBE fallar
+
+En tu terminal, ejecuta:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/06_unique_ttl.js
+```
+
+El script:
+1. Prepara `unicidad_demo`.
+2. Crea un índice único por `email`.
+3. Inserta un documento con correo `unico@ejemplo.test`.
+4. Intenta insertar otro con el mismo correo.
+5. Confirma que MongoDB **rechaza** el segundo intento, en vez de ocultar el error.
+
+Busca el mensaje `E11000` o una confirmación equivalente de que el duplicado fue rechazado.
+
+**Interpretación:** la primera inserción es correcta. La segunda debe fallar porque contradice la regla que definimos. No es una avería del contenedor.
+
+### Paso 4. Explicar la diferencia entre resultado previsto y avería
+
+Anota cuál de estas situaciones demostraría que todo funciona:
+- A) Se insertan ambos correos idénticos y el script termina sin error.
+- B) Se inserta el primero, se rechaza el segundo y el script confirma el rechazo.
+- C) No se inserta ninguno porque la conexión a MongoDB está cortada.
+
+La respuesta es **B**. La situación C no es una prueba de unicidad porque nunca llegamos a comprobar la regla de negocio.
+
+### Paso 5. Preparar TTL
+
+El mismo script crea `sesiones_demo` e introduce dos documentos:
+- uno cuya fecha `expiraEn` ya pasó;
+- otro con una fecha futura.
+
+También crea:
+
+```javascript
+db.getSiblingDB("curso_indices").sesiones_demo.createIndex(
+  {expiraEn:1},
+  {expireAfterSeconds:0}
+)
+```
+
+¿Por qué cero? Porque el campo almacena directamente **la fecha absoluta de caducidad**. El cero no significa que cualquier sesión desaparezca al insertarse; significa que queda elegible para eliminarse cuando se alcanza su fecha de expiración.
+
+### Paso 6. ¿Por qué todavía vemos el registro vencido?
+
+La eliminación no es instantánea: MongoDB utiliza un monitor TTL que funciona periódicamente. Si consultas la colección justo después de crearla y todavía ves el documento vencido, no concluyas inmediatamente que el índice no sirve.
+
+Ejecuta una prueba con margen de espera:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/07_ver_ttl.js
+```
+
+Ese archivo consulta periódicamente la colección y termina con un error si el registro vencido no desaparece dentro del límite previsto para el laboratorio. También verifica que el registro con fecha futura se conserva.
+
+**Resultado esperado:** confirmación de que el vencido desapareció y el vigente permanece. Si no lo consigues, revisa que el servidor esté funcionando y que el campo sea de tipo fecha BSON.
+
+### Paso 7. Comprobar directamente la colección
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").sesiones_demo.find().toArray())'
+```
+
+Deberías ver el documento vigente. Escribe qué campos te permiten concluir que no debería estar caducado.
+
+### Paso 8. Por qué no debemos confiar en TTL para autorizar una sesión
+
+Imagina que la aplicación comprueba «si el documento existe, la sesión está autorizada». Como el monitor puede tardar en eliminarlo, ese razonamiento es incorrecto: un registro puede existir un breve tiempo aunque su fecha ya haya pasado. La aplicación también debe comprobar la expiración cuando concede acceso.
+
+**TTL es un mecanismo de limpieza automática, no una sustitución completa de la lógica de validez de una sesión.**
+
+### Paso 9. Autocomprobación
+
+1. ¿Por qué la segunda inserción duplicada debe producir un error?
+2. Si el documento está caducado a las 10:30, ¿debe desaparecer exactamente a las 10:30:00?
+3. ¿Qué ocurriría si `expiraEn` se almacena como una cadena y no como fecha?
+4. ¿Cuál es la diferencia entre un índice unique y un índice TTL?
+
+---
+
+# Laboratorio 6 — Consultas cubiertas y mantenimiento de índices
+
+## 6.1. Nuestro problema ahora es leer menos información
+
+La empresa solicita una lista muy sencilla: identificadores de cliente e importes de sus ventas. No necesita las descripciones, etiquetas, productos ni información de ubicación.
+
+Hasta ahora buscábamos el documento y después examinábamos si cumplía las condiciones. Un índice adecuado puede permitir responder una consulta pequeña **desde sus propias claves**, sin traer el documento completo.
+
+### Paso 1. Entender la consulta y su proyección
+
+Con la instancia `mongo-indices` en marcha, abre `mongosh`:
+
+```bash
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de él:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1}
+).limit(3).toArray()
+```
+
+El primer objeto es el **filtro**, el segundo es la **proyección**: especifica los campos que queremos ver. `_id:0` excluye expresamente el identificador, que podría impedir una cobertura si el índice no lo contiene.
+
+### Paso 2. Crear un índice que contenga lo necesario
+
+```javascript
+c.createIndex(
+  {clienteId:1,importe:1},
+  {name:"ix_cubierta_cliente_importe"}
+)
+```
+
+Hemos elegido esos dos campos porque aparecen en el filtro y en la proyección. No hemos añadido la descripción ni las etiquetas porque la consulta no las necesita.
+
+### Paso 3. Observar el coste
+
+```javascript
+const e = c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1}
+).hint("ix_cubierta_cliente_importe")
+ .limit(3)
+ .explain("executionStats");
+printjson({
+  devueltos:e.executionStats.nReturned,
+  documentosExaminados:e.executionStats.totalDocsExamined,
+  clavesExaminadas:e.executionStats.totalKeysExamined
+});
+```
+
+**Resultado esperado para esta consulta diseñada como cubierta:** `documentosExaminados` puede ser cero. No significa que no haya hecho trabajo; ha recorrido claves del índice.
+
+### Paso 4. Romper deliberadamente la cobertura
+
+Ahora pedimos un campo que el índice no contiene:
+
+```javascript
+const otro = c.find(
+  {clienteId:809},
+  {_id:0,clienteId:1,importe:1,descripcion:1}
+).hint("ix_cubierta_cliente_importe")
+ .limit(3)
+ .explain("executionStats");
+printjson({
+  devueltos:otro.executionStats.nReturned,
+  documentosExaminados:otro.executionStats.totalDocsExamined,
+  clavesExaminadas:otro.executionStats.totalKeysExamined
+});
+```
+
+Compara con el paso anterior. Al pedir `descripcion`, MongoDB puede necesitar recuperar documentos para obtener ese dato. Esa diferencia explica el sentido de `FETCH`.
+
+**No concluyas que añadir todas las columnas al índice sería siempre mejor.** Índices más grandes ocupan espacio y requieren mantenimiento cuando cambian los datos.
+
+### Paso 5. Hacer inventario de índices
+
+```javascript
+c.getIndexes()
+```
+
+Busca nombres, campos y opciones. Un índice puede existir sin que el optimizador lo utilice para la consulta que acabas de ejecutar. Esta lista no sustituye las estadísticas de `explain`.
+
+### Paso 6. Ocultar un índice con intención pedagógica
+
+Prueba a ocultar **solo el índice creado por ti en este laboratorio**:
+
+```javascript
+c.hideIndex("ix_cubierta_cliente_importe")
+```
+
+Si ahora intentas forzar su uso mediante `hint`, el motor puede rechazarlo porque el índice está oculto al planificador. No debemos interpretar eso como que el índice fue eliminado: sigue existiendo y debe mantenerse.
+
+Vuelve a mostrarlo:
+
+```javascript
+c.unhideIndex("ix_cubierta_cliente_importe")
+```
+
+Comprueba con `getIndexes()` que el estado vuelve a ser visible.
+
+### Paso 7. Una retirada controlada
+
+Si has terminado y no vas a reutilizar este índice, puedes eliminar **solo** el que creaste aquí:
+
+```javascript
+c.dropIndex("ix_cubierta_cliente_importe")
+```
+
+Eso reduce el conjunto de índices disponibles, pero en una base real implicaría analizar qué consultas lo utilizan antes de borrar nada. No elimines `ix_numero` o `ix_esr`: siguen siendo parte del recorrido de aprendizaje.
+
+### Paso 8. Tu conclusión
+
+Explica con tus palabras:
+- qué significa una proyección;
+- por qué excluir `_id` puede resultar importante;
+- qué demuestra `totalDocsExamined:0` y qué **no** demuestra;
+- por qué ocultar no es lo mismo que eliminar;
+- qué riesgos introduce acumular índices indiscriminadamente.
+
+**Siguiente desafío:** repetir el experimento de índices simples con un millón de ventas, conservando idéntico filtro y registrando las métricas de ambos volúmenes.
 
 
 ---
 
+# Laboratorio 7 — La misma búsqueda con 200.000 y un millón de ventas
 
-<!-- Hoja didáctica 9, ficha imprimible -->
-## Laboratorio 04 · Línea base sin índices secundarios
-*Ejecución paso a paso*
+## Qué queremos demostrar
 
-### Resultado profesional perseguido
+Hemos dicho que un índice puede evitar que MongoDB examine enormes cantidades de documentos para encontrar uno. ¿Sigue siendo relevante cuando la colección pasa de 200.000 a **1.000.000 de ventas**?
 
-Registrar nReturned, totalDocsExamined, totalKeysExamined y COLLSCAN.
+Vamos a responder mediante una experiencia repetible. No vamos a utilizar cronómetros manuales ni proclamar que la consulta es «x veces más rápida». Recogeremos el número real de documentos y claves examinados antes y después de crear un índice.
 
-### Dónde ejecutar y con qué preparación
+Este laboratorio **se realiza al final** de las prácticas de índices porque el script de carga borra y recrea la colección `curso_indices.ventas`. No ejecutes la carga si deseas conservar los índices que preparaste para ejercicios anteriores.
 
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
+### Paso 1. Conservar las observaciones anteriores
 
-### Paso 1 · Abrir el shell del contenedor
+Antes de modificar datos, copia en tu cuaderno las métricas registradas en el Laboratorio 1 con 200.000 ventas:
 
-```powershell
-docker compose exec -it mongo-indices mongosh
+| Métrica | Sin índice | Con índice |
+|---|---:|---:|
+| `nReturned` | ______ | ______ |
+| `totalDocsExamined` | ______ | ______ |
+| `totalKeysExamined` | ______ | ______ |
+| `executionTimeMillis` | ______ | ______ |
+
+Si no guardaste esos datos, no los inventes. Puedes repetir la primera práctica completa y anotar las cifras antes de pasar al millón.
+
+**Lo importante:** registra valores medidos, no valores sugeridos por otra persona. El número 200.000 indica el volumen cargado, no que cualquier plan vaya a examinar exactamente esa cantidad.
+
+### Paso 2. Comprobar recursos y servicio
+
+Cargar un millón de documentos requiere más tiempo y espacio que cargar 200.000. Asegúrate de disponer de suficiente almacenamiento y memoria para Docker. Durante el proceso verás mensajes de progreso; no interpretes que una carga de muchos documentos está rota solo porque tarda más que la primera.
+
+Desde tu terminal en la carpeta principal:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose ps
 ```
 
-### Paso 2 · Seleccionar base y ejecutar
+Si el servicio no arranca, consulta `docker compose logs --tail=80 mongo-indices`. No intentes medir consultas hasta que la instancia esté preparada.
+
+### Paso 3. Recargar la colección con un millón de documentos
+
+```bash
+docker compose exec -T -e VENTAS=1000000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
+```
+
+**Esta operación es destructiva para la colección de práctica.** Elimina `curso_indices.ventas` y la reconstruye con un millón de ventas sintéticas. Si estabas investigando un índice específico, tendrás que volver a crearlo cuando lo necesites.
+
+Mientras se ejecuta, fíjate en los mensajes de avance. No cierres la terminal antes de que el proceso termine o informe de un error.
+
+### Paso 4. Verificar que no estamos comparando una carga parcial
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'print(db.getSiblingDB("curso_indices").ventas.countDocuments({}))'
+```
+
+Esperamos `1000000`. Si la cifra es menor, revisa el paso de carga. No continúes: el experimento depende del tamaño de la colección.
+
+Comprueba también que no existen índices secundarios:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --eval 'printjson(db.getSiblingDB("curso_indices").ventas.getIndexes())'
+```
+
+En una colección recién cargada por nuestro script debe encontrarse únicamente `_id_`. Si ves índices adicionales, la línea base se ha contaminado y el script `02_antes.js` lo señalará.
+
+### Paso 5. Repetir la medición SIN índice secundario
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
+```
+
+El script elige automáticamente una venta próxima al final de la colección. Con un millón de ventas, el valor buscado se ajusta al volumen, de modo que sigue siendo un documento existente.
+
+Anota el plan y los contadores. No confundas que `nReturned` sea 1 con que el motor solo haya examinado 1 documento.
+
+### Paso 6. Crear los índices de prácticas
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
+```
+
+El primer índice por `numero` ayuda a localizar la venta exacta; el script también prepara otros índices de las prácticas. Comprueba que aparece `ix_numero` en el listado.
+
+**Pregúntate:** ¿por qué crear un índice tarda más sobre un millón de documentos que sobre veinte? Porque el servidor debe procesar un volumen mayor de datos y construir la nueva estructura.
+
+### Paso 7. Repetir la medición CON índice
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/04_despues.js
+```
+
+Observa el cambio de plan y de documentos examinados. Para la búsqueda exacta por número, esperamos que un índice útil reduzca de manera drástica los documentos candidatos y que la operación encuentre la misma venta solicitada.
+
+Completa tu segunda tabla:
+
+| Métrica | 1.000.000 sin índice | 1.000.000 con índice |
+|---|---:|---:|
+| Documentos devueltos | ____ | ____ |
+| Documentos examinados | ____ | ____ |
+| Claves examinadas | ____ | ____ |
+| Plan | ____ | ____ |
+| Tiempo orientativo | ____ | ____ |
+
+### Paso 8. Comparar volúmenes de forma razonada
+
+Ahora ya tienes cuatro situaciones:
+1. 200.000 documentos, sin índice.
+2. 200.000 documentos, con índice.
+3. 1.000.000 de documentos, sin índice.
+4. 1.000.000 de documentos, con índice.
+
+Responde:
+- ¿Cómo cambia el trabajo de un `COLLSCAN` cuando la colección crece?
+- ¿Cuántos documentos necesita examinar el caso indexado para una venta identificada de forma unívoca?
+- ¿Por qué no debemos extrapolar automáticamente el mismo factor a los milisegundos?
+- ¿Qué otros costes habremos añadido al crear índices sobre un millón de ventas?
+
+**Solución comentada:** cuando el documento buscado está cerca del final y no existe un índice útil, el servidor puede verse obligado a inspeccionar una gran parte de la colección. Un índice selectivo permite dirigirse a pocas claves y documentos, pero también ocupa espacio y requiere trabajo de construcción y mantenimiento.
+
+### Paso 9. Detectar un experimento inválido
+
+Un compañero afirma que su índice funciona porque después de crearlo consiguió `nReturned:0` y `totalDocsExamined:0`. ¿Qué puede haber ocurrido?
+
+**Respuesta:** quizá consultó una venta inexistente. No es correcto celebrar una consulta que no encontró el documento buscado. Primero debemos comprobar que estamos comparando **la misma necesidad de información** y que el resultado es correcto.
+
+Otro compañero compara un filtro por `numero` sin índice con un filtro por `clienteId` tras indexarlo. Tampoco es una comparación limpia: cambió tanto el índice como la pregunta.
+
+### Paso 10. Conservar o eliminar los datos
+
+Si vas a seguir trabajando con otras prácticas, conserva el servicio y los datos. Puedes cerrar el shell o detener el contenedor:
+
+```bash
+docker compose stop mongo-indices
+```
+
+No ejecutes `down --volumes` por costumbre. Los datos del laboratorio son ficticios, pero debes comprender el efecto de eliminar volúmenes antes de hacerlo.
+
+---
+
+# Laboratorio 8 — Diseñar índices a partir de una necesidad comercial, no de una lista de tipos
+
+## El encargo
+
+Una empresa que vende productos en cuatro ciudades te pide mejorar tres pantallas:
+
+- **Pantalla A:** localizar una venta por número cuando llama un cliente.
+- **Pantalla B:** mostrar las últimas diez ventas pagadas cuyo importe supera 500 euros.
+- **Pantalla C:** mostrar ventas de un cliente, pero únicamente número, fecha e importe.
+
+No nos han pedido «crear tres índices». Nos han pedido **responder tres preguntas de negocio**. Tú deberás justificar qué índice elegirías y cuál podría tener un coste innecesario.
+
+### Paso 1. Escribir las consultas antes de crear nada
+
+Dentro de `mongosh` y después de seleccionar `curso_indices`:
 
 ```javascript
-use curso_indices
-db.ventas.find({clienteId:809}).explain("executionStats")
+const c = db.getSiblingDB("curso_indices").ventas;
 ```
 
-### Precondición que cambia la interpretación
+Para A:
 
-Antes de indexar, asegúrate de que ventas acaba de cargarse y solo contiene _id_ como índice.
+```javascript
+c.find({numero:199998})
+```
 
-### Evidencia concreta a registrar
+Para B:
 
-Registrar nReturned, totalDocsExamined, totalKeysExamined y COLLSCAN. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+```javascript
+c.find({estado:"pagada",importe:{$gt:500}})
+ .sort({fecha:-1})
+ .limit(10)
+```
 
-> **Si no obtienes el resultado:** _id_ continúa existiendo, aunque no se hayan creado índices secundarios.
+Para C:
 
-**Hoja para registrar salida real y conclusión**
+```javascript
+c.find(
+  {clienteId:809},
+  {_id:0,numero:1,fecha:1,importe:1}
+).limit(20)
+```
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+Lee cada comando en voz alta describiendo el filtro, la proyección, la ordenación y el límite. Si no puedes hacerlo, todavía no tiene sentido elegir índices.
+
+### Paso 2. Elegir un índice candidato para A
+
+La pantalla A utiliza una igualdad sobre un valor que identifica una venta concreta. El candidato natural es `{numero:1}`, con unicidad si esa es una regla real del dominio.
+
+¿Por qué no incluir otros diez campos? Porque la consulta solo necesita localizar por número; mantener índices grandes puede añadir coste sin aportar valor para esta pregunta.
+
+### Paso 3. Elegir un índice candidato para B
+
+La pantalla B combina igualdad de estado, ordenación descendente por fecha y rango de importe. Podemos estudiar:
+
+```javascript
+{estado:1,fecha:-1,importe:1}
+```
+
+Este es un candidato ESR que trata de conservar la ordenación por fecha dentro de cada estado. También podemos comparar una alternativa ERS:
+
+```javascript
+{estado:1,importe:1,fecha:-1}
+```
+
+No afirmes que una es la mejor sin medir; la segunda puede reducir claves recorridas en un rango altamente selectivo, pero quizás requiera ordenar los resultados.
+
+### Paso 4. Diseñar un índice para C y reflexionar sobre cobertura
+
+La pantalla C filtra por cliente y proyecta número, fecha e importe. Un candidato podría ser:
+
+```javascript
+{clienteId:1,numero:1,fecha:1,importe:1}
+```
+
+Puede cubrir la consulta si la proyección y las demás condiciones lo permiten. Sin embargo, ¿merece la pena incorporar esos cuatro campos para una pantalla utilizada una vez al día? La respuesta depende de frecuencia, tamaño de los datos y coste de escritura.
+
+Un índice que cubre una consulta no es automáticamente la mejor elección para toda la aplicación.
+
+### Paso 5. Elaborar una propuesta defendible
+
+Prepara una tabla:
+
+| Pantalla | Índice candidato | Beneficio esperado | Coste o riesgo |
+|---|---|---|---|
+| A | ______ | ______ | ______ |
+| B | ______ | ______ | ______ |
+| C | ______ | ______ | ______ |
+
+Cada fila debe contener una justificación concreta. No basta escribir `IXSCAN` como beneficio: explica qué parte del filtro u ordenación podría utilizarse desde el índice.
+
+### Paso 6. Medir en MongoDB
+
+Si ya existen los índices de los laboratorios anteriores, comprueba cuáles están disponibles mediante:
+
+```javascript
+c.getIndexes()
+```
+
+Luego ejecuta cada consulta con `explain("executionStats")`. Observa planes, documentos devueltos, claves examinadas, documentos examinados y etapas de ordenación.
+
+Si todavía no existe un índice candidato, puedes crearlo **en el entorno de laboratorio**, ejecutar la consulta y comparar su plan. Documenta siempre qué índice acabas de crear para poder distinguir lo anterior de lo nuevo.
+
+### Paso 7. Presentar conclusiones comprensibles
+
+No entregues un JSON enorme sin explicación. Prepara un resumen para la persona responsable de la empresa:
+
+- «La pantalla A busca una venta concreta. Un índice por número permite localizarla sin recorrer toda la colección».
+- «La pantalla B es más compleja porque además de filtrar debe ordenar. Hemos medido dos estrategias y observado el trabajo de cada una».
+- «La pantalla C solo necesita algunos campos. Una proyección adecuada puede evitar transferir datos innecesarios y un índice estudiado podría cubrir la consulta».
+
+**Evaluación:** si alguien que no conoce `mongosh` puede entender qué problema resolviste, has completado la parte profesional del ejercicio. Si solo ve una lista de comandos, todavía falta tu explicación.
 
 
 ---
 
+# Laboratorio 9 — Unicidad condicionada: cupones activos e índices parciales
 
-<!-- Hoja didáctica 10, ficha imprimible -->
-## Laboratorio 04 · Línea base sin índices secundarios
-*Solución comentada y ampliación*
+## La historia de negocio
 
-### Solución razonada
+Una tienda emite códigos promocionales. Quiere impedir que existan **dos promociones activas con el mismo código**. Sin embargo, un cupón de una campaña anterior puede estar inactivo y su código podría reutilizarse cuando la política comercial lo permita.
 
-Sin índices secundarios el filtro clienteId recorre documentos: habitualmente verás COLLSCAN con muchos docsExamined. La consulta sí devuelve ventas; esa es la prueba positiva de que los datos están. Si aparece IXSCAN antes del experimento, alguien creó un índice o no se recargó la colección.
+La regla correcta no es «todos los códigos de toda la historia deben ser únicos». Es una regla **condicionada por el estado activo**.
 
-### Por qué ocurre
+Este laboratorio enseña a traducir una frase de negocio en un índice `unique` con una condición `partialFilterExpression`. También enseña que una actualización puede infringir la restricción aunque la inserción original fuera válida.
 
-Piensa en el registro de una tienda: pedir una factura por numero no debería obligar a abrir cada carpeta. Si existen 200.000 ventas y el filtro devuelve una, la lectura secuencial puede examinar del orden de 200.000 documentos. Esa desproporción es más informativa que un tiempo aislado. El plan puede incluir otras etapas; hay que mirar el árbol entero. Para obtener una línea de base limpia ejecuta la medición ANTES de crear índices secundarios y conserva el tamaño de la colección. Una vez instalado un índice específico, repite exactamente el mismo filtro, proyección y límite.
+### Paso 1. Crear una colección independiente
 
-### Qué no permite concluir
+Abre `mongosh` en la instancia de índices:
 
-_id_ continúa existiendo, aunque no se hayan creado índices secundarios. Con solo _id_ disponible, el filtro numero o clienteId no dispone de acceso secundario selectivo; normalmente los documentos examinados se acercarán al tamaño completo.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({numero:25001}).limit(1).explain("executionStats")
+```bash
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-La presencia de limit(1) no elimina el recorrido previo de documentos hasta localizar la operación. Compara el número examinado con una consulta por _id y razona qué estructura necesitaría numero.
+Dentro del shell:
 
-### Ejercicio de transferencia
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.cupones_clase.drop();
+```
 
-Ejecutar una segunda vez y discutir por qué cambian milisegundos.
+La orden `drop` elimina **solo** la colección ficticia `cupones_clase`. No modifica las ventas principales.
 
-### Criterio de corrección de esta práctica
+### Paso 2. Formular la restricción
 
-La corrección del ejercicio exige acreditar registrar nReturned, totalDocsExamined, totalKeysExamined y COLLSCAN. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+Queremos que el campo `codigo` sea único **solo cuando `activo` sea verdadero**. Creamos:
 
-**Diario de comparación / conclusión**
+```javascript
+d.cupones_clase.createIndex(
+  {codigo:1},
+  {
+    name:"ix_codigo_activo",
+    unique:true,
+    partialFilterExpression:{activo:true}
+  }
+);
+```
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+Piensa en las piezas:
+- `codigo:1` define la clave del índice.
+- `unique:true` prohíbe duplicar claves dentro del conjunto afectado.
+- `partialFilterExpression` determina qué documentos pertenecen a ese conjunto.
+
+No estamos diciendo que `activo` sea parte de la clave ordenada; lo usamos como **condición de pertenencia al índice**.
+
+### Paso 3. Introducir un cupón activo
+
+```javascript
+d.cupones_clase.insertOne({
+  _id:1,
+  codigo:"PROMO7",
+  activo:true,
+  descripcion:"Campaña actual"
+});
+```
+
+Debe insertarse correctamente. El índice incorpora el valor `PROMO7` porque el documento cumple el filtro `activo:true`.
+
+### Paso 4. Introducir un cupón inactivo con el mismo código
+
+```javascript
+d.cupones_clase.insertOne({
+  _id:2,
+  codigo:"PROMO7",
+  activo:false,
+  descripcion:"Campaña antigua"
+});
+```
+
+Este documento **no cumple el filtro parcial** y, bajo la regla que acabamos de definir, no entra en el conjunto de claves cuya unicidad controlamos. Se espera una inserción permitida.
+
+**Comprueba el estado de la colección:**
+
+```javascript
+d.cupones_clase.find({codigo:"PROMO7"}).toArray()
+```
+
+Deben verse dos cupones con el mismo código, uno activo y otro inactivo. No es una contradicción: el requisito no prohibía todos los duplicados históricos.
+
+### Paso 5. Intentar activar el duplicado
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:2},
+  {$set:{activo:true}}
+);
+```
+
+**Resultado esperado:** rechazo por violación de unicidad. La actualización haría que el segundo cupón entrara en el conjunto indexado donde ya existe otro activo con el mismo código.
+
+Este paso muestra una propiedad fundamental: **los índices afectan también a las actualizaciones**. Una restricción sobre datos de negocio no se limita al momento de insertar.
+
+### Paso 6. Comprobar que el documento sigue inactivo
+
+```javascript
+d.cupones_clase.findOne({_id:2})
+```
+
+El valor `activo` debe continuar siendo falso si la actualización se rechazó. Así verificamos que el rechazo protegió la integridad de los documentos.
+
+### Paso 7. Ensayar la reutilización después de desactivar el original
+
+Desactiva el primer cupón:
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:1},
+  {$set:{activo:false}}
+);
+```
+
+Ahora intenta activar el segundo:
+
+```javascript
+d.cupones_clase.updateOne(
+  {_id:2},
+  {$set:{activo:true}}
+);
+```
+
+**Resultado esperado:** esta vez sí puede activarse, porque ya no existe otro cupón activo con `PROMO7`. Consulta ambos documentos y comprueba que la regla final se cumple.
+
+### Paso 8. Explicar la diferencia entre índice simple, único y parcial
+
+| Diseño | Qué resolvería | Limitación respecto al negocio |
+|---|---|---|
+| `{codigo:1}` normal | Facilitar búsquedas por código | No impide duplicados |
+| `{codigo:1}` unique general | Impedir duplicados en toda la colección | Puede ser demasiado restrictivo para cupones antiguos |
+| Unique con filtro `activo:true` | Impedir coincidencias entre cupones activos | Depende de que `activo` esté modelado correctamente |
+
+**Debate:** ¿qué debe suceder si un documento no tiene campo `activo`? No basta con dejar que la aplicación «lo interprete como quiera». Hay que definir una política coherente para ese estado.
+
+### Paso 9. Comprobar de forma automática
+
+El repositorio contiene un archivo de prueba complementario, `lab/17_partial_unique_guiado.js`, que ejecuta el escenario con datos de ejemplo y comprueba los rechazos esperados. Puedes ejecutarlo en una colección aislada desde la terminal:
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/17_partial_unique_guiado.js
+```
+
+**No ejecutes este script antes de guardar tus observaciones manuales**: utiliza su propia colección de prueba y la recrea para garantizar un punto de partida conocido.
+
+### Evaluación
+
+Una alumna propone crear `{codigo:1,activo:1}` con `unique:true` y afirma que así resuelve exactamente el problema. ¿Es equivalente a nuestro diseño parcial?
+
+Piénsalo: un índice único compuesto sobre esas dos claves puede restringir también que existan dos cupones **inactivos** con el mismo código. La regla de negocio solo exigía unicidad entre los activos. Comprender esta diferencia es más importante que recordar de memoria la palabra `partialFilterExpression`.
+
+---
+
+# Laboratorio 10 — Investigar un índice que nadie utiliza
+
+## El encargo
+
+Un administrador dice: «He creado el índice `ix_cliente` y la búsqueda sigue comportándose como antes. ¿Está MongoDB ignorando mi trabajo?». No vamos a responder que el índice está mal sin observar la consulta. Puede ser un índice poco útil, una pregunta distinta de la que motivó su creación, un plan de consulta razonable o una colección demasiado pequeña.
+
+### Paso 1. Identificar la consulta real
+
+Supongamos que la pantalla pide ventas por `estado`, no por `clienteId`:
+
+```javascript
+db.ventas.find({estado:"pagada"}).limit(100)
+```
+
+Aunque exista `ix_cliente`, este índice está organizado por otro campo. Su mera existencia no garantiza utilidad para esta consulta.
+
+### Paso 2. Consultar índices reales
+
+Dentro de `mongosh`:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.getIndexes()
+```
+
+Busca:
+- nombre del índice;
+- campos y direcciones;
+- propiedades como `unique` u opciones adicionales.
+
+No deduzcas que los índices con nombres largos son mejores. El nombre sirve para identificarlos; son su clave y opciones las que determinan su función.
+
+### Paso 3. Inspeccionar el plan sin forzar nada
+
+```javascript
+c.find({estado:"pagada"}).limit(100).explain("executionStats")
+```
+
+Observa el plan ganador y los contadores. Si devuelve cien documentos, no significa automáticamente que examinará cien; podría necesitar recorrer más claves o documentos para localizar esos cien.
+
+### Paso 4. Formular una hipótesis
+
+Si el optimizador no elige `ix_cliente`, una hipótesis razonable es que la consulta no contiene un filtro que aproveche su ordenación. Si elige otro índice, quizá este sirva mejor a los criterios consultados.
+
+No debes cambiar código hasta expresar qué esperabas del índice y por qué.
+
+### Paso 5. Comprobar con una consulta del campo indexado
+
+```javascript
+c.find({clienteId:809}).limit(10).explain("executionStats")
+```
+
+Compara plan y contadores. La nueva consulta ya pregunta por el campo para el que se creó `ix_cliente`. **No compares los tiempos de estas dos consultas como si fueran antes/después del mismo experimento**: acabas de cambiar el filtro. Utilízalas únicamente para mostrar que un índice está vinculado a necesidades concretas.
+
+### Paso 6. Ensayar una retirada sin destruir el índice
+
+En una colección de laboratorio puedes ocultar temporalmente `ix_cliente`:
+
+```javascript
+c.hideIndex("ix_cliente")
+```
+
+Repite la consulta por cliente, pero **sin `hint`**, para comprobar cómo planifica MongoDB sin poder utilizar ese índice oculto. Después restáuralo:
+
+```javascript
+c.unhideIndex("ix_cliente")
+```
+
+Ocultar no reduce automáticamente el espacio ocupado ni el mantenimiento de ese índice; es un mecanismo de estudio de planes y gestión.
+
+### Paso 7. Registrar una decisión argumentada
+
+Completa:
+- Consulta que motivó el índice: ______.
+- Índice realmente definido: ______.
+- Plan sin forzar: ______.
+- Documentos y claves examinados: ______.
+- ¿La consulta utiliza un campo compatible con el índice?: ______.
+- ¿Qué otras consultas podrían necesitarlo?: ______.
+
+**Conclusión:** decidir si eliminar un índice exige comprender el conjunto de consultas de la aplicación, no una única medición. En producción los cambios deben estudiarse con datos de uso, pruebas y procedimientos de recuperación.
 
 
 ---
 
+# Laboratorio 11 — Diagnosticar una consulta que devuelve cero ventas
 
-<!-- Hoja didáctica 11, ficha imprimible -->
-## Laboratorio 05 · Búsqueda por número de venta
-*Ejecución paso a paso*
+## El error que vamos a investigar
 
-### Resultado profesional perseguido
+Una persona afirma que el índice de ventas «ha dejado de funcionar» porque su consulta devuelve cero resultados. Lo primero que debes aprender es que **cero resultados no demuestra que el índice esté roto**. Una consulta puede ser perfectamente correcta, ejecutarse sin errores y devolver cero simplemente porque no existe un documento que cumpla su filtro.
 
-Comparar coste de buscar una clave funcional sin índice.
+Vamos a distinguir cuatro causas que, desde una pantalla de usuario, pueden parecer iguales: filtro incorrecto, campo mal escrito, base de datos equivocada y documento realmente inexistente.
 
-### Dónde ejecutar y con qué preparación
+### Preparación
 
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
+Este ejercicio **no requiere borrar ni recargar las ventas**. Utiliza las que ya están almacenadas en `curso_indices.ventas`. Abre una terminal en la raíz del proyecto:
 
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-### Paso 2 · Seleccionar base y ejecutar
+La primera línea se ejecuta en PowerShell o Bash. La segunda abre `mongosh` dentro del contenedor. A partir de ahora los ejemplos JavaScript se escriben **dentro de `mongosh`**.
+
+### Paso 1. Comprobar si existen datos
 
 ```javascript
-use curso_indices
-db.ventas.find({numero:25001}).explain("executionStats")
+const ventas = db.getSiblingDB("curso_indices").ventas;
+ventas.countDocuments({})
 ```
 
-### Precondición que cambia la interpretación
+Debes obtener una cifra positiva. Si aparece cero, no continúes buscando un fallo de índices: aún no has confirmado que existe el conjunto de datos. Realiza la carga del primer laboratorio antes de seguir.
 
-Antes de indexar, asegúrate de que ventas acaba de cargarse y solo contiene _id_ como índice.
+### Paso 2. Buscar un número existente
 
-### Evidencia concreta a registrar
+```javascript
+ventas.findOne({numero:1})
+```
 
-Comparar coste de buscar una clave funcional sin índice. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+El generador docente crea números consecutivos desde uno. Por tanto, debería aparecer un documento cuyo campo `numero` sea uno. Observa su `estado`, `importe` y `clienteId`.
 
-> **Si no obtienes el resultado:** Elegir número presente según la cantidad de registros cargados.
+**Anota los tres valores reales**. No copies los de este texto: vamos a trabajar sobre lo que contenga tu base.
 
-**Hoja para registrar salida real y conclusión**
+### Paso 3. Buscar un número inexistente
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+```javascript
+ventas.findOne({numero:-999})
+```
+
+Este filtro busca un número que no forma parte de la secuencia de ventas generada. Si aparece `null` o no se encuentra un documento, la explicación es sencilla: no existe una venta con ese identificador. No hay un error de conexión ni una violación de la integridad.
+
+### Paso 4. Introducir un nombre de campo equivocado
+
+```javascript
+ventas.findOne({número:1})
+```
+
+Fíjate en la tilde: el generador creó `numero` sin tilde. MongoDB no interpreta ambos nombres como sinónimos. **No se puede solucionar esta diferencia creando un índice de forma indiscriminada**: primero hay que corregir el filtro.
+
+Si obtienes cero resultados, explica por qué esta situación es distinta de buscar el número -999: ahora la base sí contiene el identificador uno, pero hemos escrito mal el campo.
+
+### Paso 5. Consultar otra base de datos
+
+Compara:
+
+```javascript
+db.getSiblingDB("curso_indices").ventas.findOne({numero:1})
+db.getSiblingDB("otra_base").ventas.findOne({numero:1})
+```
+
+En el laboratorio solo preparamos las ventas dentro de `curso_indices`. Si en `otra_base` no existe esa colección, la consulta no encontrará el documento. Esto demuestra que **el nombre de la base también forma parte del contexto de cada operación**.
+
+No introduzcas datos en `otra_base` para «arreglar» el resultado: la pregunta correcta se refiere a `curso_indices`.
+
+### Paso 6. Comparar un filtro de igualdad con un rango
+
+```javascript
+ventas.find({importe:500}).limit(3).toArray()
+ventas.find({importe:{$gt:500}}).limit(3).toArray()
+```
+
+La primera pide exactamente 500. La segunda pide cualquier importe superior a 500. Pueden devolver cantidades muy distintas, incluso si hay un índice por importe. El índice no cambia el significado del símbolo `$gt`.
+
+### Paso 7. Verificar sin confundir la consulta con el plan
+
+Para una búsqueda que encuentra una venta:
+
+```javascript
+const e = ventas.find({numero:1}).explain("executionStats");
+printjson({
+  encontrados:e.executionStats.nReturned,
+  examinados:e.executionStats.totalDocsExamined,
+  claves:e.executionStats.totalKeysExamined
+});
+```
+
+Ahora repite con `numero:-999`. Es posible que un índice localice rápidamente que la clave no existe y examine muy poco. Ese resultado no demuestra que la segunda consulta «sea mejor»: las preguntas tienen resultados distintos.
+
+### Paso 8. Redactar un diagnóstico profesional
+
+Completa una tabla con **tus propias observaciones**:
+
+| Consulta | Resultado esperado | Causa si devuelve cero |
+|---|---|---|
+| `numero:1` | Existe | Revisar carga o base de datos |
+| `numero:-999` | No existe | Valor ausente |
+| `número:1` | No existe | Campo escrito de otro modo |
+| Otra base de datos | No existe | Contexto equivocado |
+
+Explica por qué cada caso requiere una corrección diferente. El aprendizaje clave es que **optimizar una consulta incorrecta no convierte su resultado en correcto**.
+
+---
+
+# Laboratorio 12 — Orden estable y paginación: el problema de las fechas empatadas
+
+## Una pantalla puede mostrar diez resultados distintos sin que se haya perdido ninguno
+
+La empresa quiere mostrar las diez ventas pagadas más recientes. Has aprendido a escribir `sort({fecha:-1}).limit(10)`. Pero ahora aparece una incidencia: al repetir la pantalla, en ocasiones los números de venta en la última posición no son los mismos.
+
+¿Se ha perdido información? No necesariamente. Si varios documentos comparten fecha, ordenar únicamente por fecha no define **qué documento va primero dentro del empate**. Cuando además utilizamos un límite de diez, los empates cercanos al corte pueden influir en qué documentos aparecen.
+
+Este ejercicio enseña algo imprescindible en aplicaciones reales: **ordenar por un campo que puede repetirse no garantiza un orden total**.
+
+### Paso 1. Crear una colección de solo seis documentos
+
+Usaremos una colección de clase independiente para comprender el problema sin depender de 200.000 ventas. Dentro de `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.orden_empates_clase.drop();
+d.orden_empates_clase.insertMany([
+  {_id:1,estado:"pagada",fecha:ISODate("2025-05-01"),importe:90},
+  {_id:2,estado:"pagada",fecha:ISODate("2025-05-03"),importe:110},
+  {_id:3,estado:"pagada",fecha:ISODate("2025-05-03"),importe:120},
+  {_id:4,estado:"pagada",fecha:ISODate("2025-05-03"),importe:130},
+  {_id:5,estado:"pagada",fecha:ISODate("2025-05-02"),importe:140},
+  {_id:6,estado:"pendiente",fecha:ISODate("2025-05-04"),importe:150}
+]);
+```
+
+El `drop` solo elimina `orden_empates_clase`, una colección de prueba. Las ventas principales no se modifican.
+
+### Paso 2. Ordenar exclusivamente por fecha
+
+```javascript
+d.orden_empates_clase.find(
+  {estado:"pagada"}
+).sort({fecha:-1}).limit(2).toArray()
+```
+
+Los documentos del día 3 deben aparecer antes que los del día 2. Pero existen **tres ventas pagadas del día 3**, todas empatadas en `fecha`. Con un límite de dos, ¿cuáles deben aparecer? El filtro y la ordenación no especifican cómo resolver ese empate.
+
+**No interpretes que falta un documento de la colección:** limitaste explícitamente los resultados a dos. Los demás continúan almacenados.
+
+### Paso 3. Crear un orden total
+
+Añade el identificador como criterio de desempate:
+
+```javascript
+d.orden_empates_clase.find(
+  {estado:"pagada"}
+).sort({fecha:-1,_id:1}).limit(2).toArray()
+```
+
+Ahora el orden lógico es:
+1. Primero la fecha descendente.
+2. Para fechas idénticas, identificador ascendente.
+
+**Resultado esperado:** aparecen los documentos del día 3 con identificadores 2 y 3. Ya no hemos dejado el empate sin resolver.
+
+### Paso 4. Comparar índices candidatos
+
+```javascript
+d.orden_empates_clase.createIndex(
+  {estado:1,fecha:-1},
+  {name:"ix_sin_desempate"}
+);
+d.orden_empates_clase.createIndex(
+  {estado:1,fecha:-1,_id:1},
+  {name:"ix_con_desempate"}
+);
+```
+
+El primer índice ordena por estado y fecha, pero no contiene como tercera clave explícita el desempate que solicita la consulta. El segundo sí incorpora los tres campos que estamos estudiando.
+
+No concluyas automáticamente cuál elegirá el optimizador. Usa `explain` para observarlo; si quieres comparar, emplea `hint` de forma controlada sobre una consulta idéntica.
+
+### Paso 5. Visualizar el plan
+
+```javascript
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1})
+  .limit(2)
+  .hint("ix_con_desempate")
+  .explain("executionStats")
+```
+
+Observa el plan, las claves examinadas y el resultado. Con seis documentos el tiempo será poco significativo. La práctica es de **semántica y diseño de índices**, no una carrera de milisegundos.
+
+### Paso 6. Paginación con skip y limit
+
+Podemos pedir «la primera página» de dos documentos y la segunda página de dos:
+
+```javascript
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1}).skip(0).limit(2).toArray()
+d.orden_empates_clase.find({estado:"pagada"})
+  .sort({fecha:-1,_id:1}).skip(2).limit(2).toArray()
+```
+
+`skip` indica cuántos resultados se omiten después de aplicar el orden. En esta colección pequeña es útil para aprender. Sobre colecciones grandes, omitir muchos resultados puede implicar recorrerlos, por lo que la paginación por desplazamiento puede encarecerse.
+
+### Paso 7. Comprender la paginación por cursor
+
+Cuando se ordena por fecha e identificador, es posible diseñar una paginación basada en el último par de valores visto, en vez de omitir miles de documentos. Esto requiere expresar correctamente una condición de continuación coherente con las direcciones de ordenación.
+
+No vamos a convertir un ejemplo introductorio en una arquitectura de paginación profesional completa, pero **sí debemos comprender por qué el desempate es imprescindible** para un cursor estable.
+
+### Paso 8. Comprobar que todo sigue en la colección
+
+```javascript
+d.orden_empates_clase.countDocuments({})
+```
+
+Debe devolver seis. No confundas cantidad almacenada y cantidad mostrada por una página.
+
+### Actividad final
+
+Explica por qué estos dos fragmentos expresan pedidos diferentes:
+
+```javascript
+.sort({fecha:-1}).limit(2)
+.sort({fecha:-1,_id:1}).limit(2)
+```
+
+Tu respuesta debe mencionar los empates, el criterio secundario y el hecho de que el límite actúa sobre una secuencia ordenada. La aplicación no puede asumir que MongoDB adivinará el orden de negocio que nadie especificó.
+
+---
+
+# Laboratorio 13 — ¿Qué ocurre al modificar una clave de índice?
+
+## Un índice no es una fotografía congelada
+
+Hasta ahora hemos creado índices y ejecutado consultas. Pero una base de datos real cambia: se insertan ventas, se actualizan sus estados y se corrigen importes. MongoDB debe mantener los índices coherentes con esos cambios.
+
+Si una aplicación modifica una venta de `pendiente` a `pagada`, un índice por `estado` no puede seguir tratando el documento como pendiente. La actualización de los datos debe reflejarse en las estructuras de acceso.
+
+Vamos a observarlo en una colección diminuta que podemos modificar sin riesgo.
+
+### Paso 1. Preparar los datos
+
+Dentro de `mongosh` conectado a la instancia `mongo-indices`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.cambios_indice_clase.drop();
+d.cambios_indice_clase.insertMany([
+  {_id:1,estado:"pendiente",importe:45},
+  {_id:2,estado:"pagada",importe:70},
+  {_id:3,estado:"pagada",importe:80}
+]);
+```
+
+Comprueba que hay una pendiente y dos pagadas:
+
+```javascript
+d.cambios_indice_clase.countDocuments({estado:"pendiente"})
+d.cambios_indice_clase.countDocuments({estado:"pagada"})
+```
+
+Esperamos uno y dos, respectivamente.
+
+### Paso 2. Crear un índice compuesto
+
+```javascript
+d.cambios_indice_clase.createIndex(
+  {estado:1,importe:1},
+  {name:"ix_estado_importe"}
+);
+```
+
+Ahora el índice organiza las ventas primero por estado y, dentro de cada estado, por importe. Si la aplicación busca todas las pagadas, puede beneficiarse de ese índice según el plan elegido.
+
+### Paso 3. Modificar el estado
+
+```javascript
+d.cambios_indice_clase.updateOne(
+  {_id:1},
+  {$set:{estado:"pagada"}}
+);
+```
+
+**Resultado esperado:** una actualización reconocida. La venta identificada con uno ya no pertenece lógicamente al conjunto de pendientes.
+
+Vuelve a contar:
+
+```javascript
+d.cambios_indice_clase.countDocuments({estado:"pendiente"})
+d.cambios_indice_clase.countDocuments({estado:"pagada"})
+```
+
+Ahora esperamos cero pendientes y tres pagadas.
+
+### Paso 4. Forzar el índice como instrumento de estudio
+
+```javascript
+d.cambios_indice_clase.find({estado:"pagada"})
+ .hint("ix_estado_importe").toArray()
+```
+
+Deben aparecer los tres documentos. Esto ilustra que el índice refleja la información actual, no la que tenía el documento cuando creamos el índice.
+
+### Paso 5. Actualizar el importe
+
+```javascript
+d.cambios_indice_clase.updateOne(
+  {_id:2},
+  {$set:{importe:10}}
+);
+```
+
+Consulta las pagadas ordenadas por importe:
+
+```javascript
+d.cambios_indice_clase.find({estado:"pagada"})
+ .sort({importe:1})
+ .hint("ix_estado_importe").toArray()
+```
+
+La venta dos debe aparecer con importe diez. Los índices no «guardan el valor antiguo» como si fueran un archivo de consulta manual que nunca se actualiza.
+
+### Paso 6. Comprender el coste de mantenimiento
+
+Cada inserción, actualización o borrado que afecta a campos indexados puede requerir modificar las entradas correspondientes. Por eso los índices tienen un coste de escritura.
+
+**Pregunta profesional:** ¿por qué no deberíamos crear un índice compuesto enorme que contenga todos los campos de una venta solo para evitar algunas recuperaciones de documentos?
+
+Respuesta orientativa: porque aumenta el tamaño y el trabajo de mantenerlo. Hay que demostrar que las consultas justifican ese coste.
+
+### Paso 7. Probar una restricción de integridad
+
+Crea un índice único sobre un campo de ejemplo en una colección aislada:
+
+```javascript
+d.codigo_unico_clase.drop();
+d.codigo_unico_clase.createIndex({codigo:1},{unique:true});
+d.codigo_unico_clase.insertMany([
+  {_id:1,codigo:"A"},
+  {_id:2,codigo:"B"}
+]);
+```
+
+Ahora intenta actualizar el código B por A:
+
+```javascript
+d.codigo_unico_clase.updateOne({_id:2},{$set:{codigo:"A"}})
+```
+
+**Resultado esperado:** un error de clave duplicada. Eso demuestra que una restricción unique no se aplica únicamente al insertar: también protege actualizaciones.
+
+### Paso 8. Confirmar que el dato original permanece
+
+```javascript
+d.codigo_unico_clase.findOne({_id:2})
+```
+
+El código debe seguir siendo B. Si estuvieras escribiendo una aplicación, tendrías que decidir cómo comunicar al usuario que su actualización infringió una regla.
+
+### Preguntas de comprensión
+
+- ¿Qué observación demuestra que el índice sigue representando los datos actuales?
+- ¿Por qué el índice unique debe comprobar también una actualización?
+- ¿Qué relación existe entre más índices y mayor trabajo de escritura?
+- ¿Por qué una restricción de negocio no debería implementarse únicamente con una comprobación manual en la pantalla de la aplicación?
+
+---
+
+# Laboratorio 14 — Elaborar un informe de rendimiento que otra persona pueda entender
+
+## Una prueba no sirve de mucho si nadie puede interpretarla
+
+Imagina que tu responsable te pide «demuéstrame que el nuevo índice merece la pena». No bastará con enviar un archivo JSON de `explain` de mil líneas ni con afirmar «en mi ordenador funcionaba rápido». Hay que construir una explicación que relacione una consulta real, los datos disponibles, el plan y los resultados.
+
+Este laboratorio no exige crear índices nuevos. **Reutiliza resultados observados** y te enseña a redactar una conclusión técnica rigurosa.
+
+### Paso 1. Identificar la necesidad
+
+Describe la pantalla o proceso que estudiaste. Ejemplo:
+
+> «Una aplicación de atención al cliente necesita encontrar rápidamente una venta por su número».
+
+Es mucho mejor que escribir «optimización del índice ix_numero», porque primero explica el propósito del sistema.
+
+### Paso 2. Documentar el filtro exacto
+
+Por ejemplo:
+
+```javascript
+db.getSiblingDB("curso_indices").ventas.find({numero:199998})
+```
+
+Aclara que el número concreto debe existir en el conjunto cargado y que la consulta devuelve una venta identificada de forma inequívoca.
+
+### Paso 3. Registrar el volumen y el estado de los índices
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
+c.getIndexes()
+```
+
+Escribe cuántos documentos había, qué índices relevantes existían y si la medición procede de una colección recién cargada o de un entorno con varios índices de prácticas anteriores.
+
+No mezcles métricas de estados distintos. Si recargaste la colección, posiblemente cambió el catálogo de índices.
+
+### Paso 4. Escoger métricas con significado
+
+Un resumen útil:
+
+| Dato | Sin índice | Con índice |
+|---|---:|---:|
+| Documentos devueltos | Medido | Medido |
+| Documentos examinados | Medido | Medido |
+| Claves examinadas | Medido | Medido |
+| Etapas principales | Observadas | Observadas |
+| Tiempo de esa ejecución | Observado | Observado |
+
+Cuando no dispongas del estado «sin índice» porque ya creaste estructuras, no lo inventes. Repite el experimento en el laboratorio o explica que solo tienes evidencia parcial.
+
+### Paso 5. Comprobar si la comparación es justa
+
+Pregunta:
+- ¿La consulta era la misma?
+- ¿La cantidad de datos era la misma?
+- ¿La proyección y el límite coincidían?
+- ¿El documento existía en ambas mediciones?
+- ¿Sabemos qué índice se utilizó?
+- ¿Se ejecutó en un entorno comparable?
+
+Si alguna respuesta es no, el informe debe indicar esa limitación. La honestidad de la medición vale más que una cifra espectacular.
+
+### Paso 6. Explicar la diferencia entre hechos e inferencias
+
+**Hecho observado:** «En una ejecución, MongoDB examinó 200.000 documentos sin índice y uno después de crear un índice por número».
+
+**Interpretación razonable:** «En esta búsqueda muy selectiva, el índice redujo el trabajo necesario para localizar el documento».
+
+**Afirmación no respaldada:** «Cualquier consulta será 200.000 veces más rápida».
+
+Separar estas frases es parte de aprender a evaluar un sistema.
+
+### Paso 7. Evaluar costes y límites
+
+Tu informe debe mencionar al menos uno de los siguientes aspectos:
+- almacenamiento ocupado por el índice;
+- mantenimiento ante inserciones y actualizaciones;
+- impacto de cambios en el volumen de datos;
+- diferencia entre consultas selectivas y consultas que devuelven muchos documentos;
+- variabilidad de los tiempos observados.
+
+### Paso 8. Presentación final
+
+Escribe un informe de una página con:
+1. Problema original.
+2. Consulta analizada.
+3. Conjunto de datos.
+4. Índice elegido y justificación.
+5. Evidencia antes/después.
+6. Costes y limitaciones.
+7. Próxima comprobación que harías antes de producción.
+
+Una persona ajena a MongoDB debería entender **por qué el índice importa** sin tener que leer todo el JSON original.
+
+### Solución de ejemplo
+
+«La pantalla busca una venta concreta entre 200.000 registros. Sin un índice secundario por número, la consulta necesitó examinar una gran cantidad de documentos para devolver uno. Después se añadió un índice ascendente único sobre el número. Al repetir el mismo filtro, el plan utilizó el índice y los documentos examinados se redujeron drásticamente. Esta mejora se refiere al trabajo de la consulta medida; los tiempos son específicos del equipo y el índice introduce un coste de almacenamiento y mantenimiento».
+
+**Ese informe sí demuestra comprensión.** Una captura del mensaje `[OK]`, por sí sola, no.
 
 
 ---
 
+# Laboratorio 15 — Búsquedas sin distinguir mayúsculas: collation e índices
 
-<!-- Hoja didáctica 12, ficha imprimible -->
-## Laboratorio 05 · Búsqueda por número de venta
-*Solución comentada y ampliación*
+## Por qué «Ana» y «ana» no siempre deben ser personas distintas
 
-### Solución razonada
+Una aplicación de inscripciones permite buscar alumnos por su nombre. Un usuario escribe «ana» y espera encontrar a «Ana». En otra aplicación, un código de producto `AB-10` debe tratarse como diferente de `ab-10` por una regla del negocio.
 
-El valor numero=25001 existe para todos los tamaños admitidos. Aunque sea único en el conjunto sintético, eso no convierte a numero en la clave _id. Observa el contador de documentos examinados; después explica qué diferencia hay entre identidad de documento y clave funcional.
+Antes de indexar hay que decidir **qué significa considerar dos valores iguales**. Los índices no pueden tomar esa decisión por nosotros.
 
-### Por qué ocurre
+MongoDB permite definir reglas de comparación lingüística mediante **collation**. Una collation puede influir en cómo se comparan y ordenan cadenas, incluido si distinguimos mayúsculas, acentos y otros aspectos según idioma y fuerza de comparación.
 
-Cada colección normal contiene un índice único sobre _id que soporta las búsquedas por identificador del documento. El campo numero no se convierte en _id automáticamente: aunque represente una clave de negocio, es otro camino de acceso. El nombre de la clave funcional importa también por integridad: si numero debe ser irrepetible, un índice unique en numero representa una regla distinta. No elimines ni modifiques _id para demostrar la diferencia.
+Vamos a estudiar un caso sencillo con nombres ficticios.
 
-### Qué no permite concluir
+### Paso 1. Iniciar MongoDB y abrir mongosh
 
-Elegir número presente según la cantidad de registros cargados. getIndexes debe contener _id_ con unique; verificar que buscar por numero carece de privilegio automático por el mero parecido semántico.
+Desde PowerShell o Bash:
 
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.findOne({_id:db.ventas.findOne()._id})
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-El acceso por _id sirve para identificar un documento; numero es una propiedad distinta. Si la aplicación recibe codigo de negocio, necesitará elegir una clave de acceso apropiada.
+Las instrucciones siguientes se ejecutan **dentro de `mongosh`**. No vamos a tocar `ventas`.
 
-### Ejercicio de transferencia
+### Paso 2. Crear una colección de nombres
 
-Preguntar por qué numero no se beneficia del índice de _id.
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.nombres_clase.drop();
+d.nombres_clase.insertMany([
+  {_id:1,nombre:"Ana",ciudad:"Madrid"},
+  {_id:2,nombre:"Carlos",ciudad:"Sevilla"},
+  {_id:3,nombre:"Beatriz",ciudad:"Bilbao"}
+]);
+```
 
-### Criterio de corrección de esta práctica
+El `drop` afecta únicamente a la colección de clase `nombres_clase`. Observa que el nombre del primer documento empieza por mayúscula.
 
-La corrección del ejercicio exige acreditar comparar coste de buscar una clave funcional sin índice. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+### Paso 3. Consultar por un valor exacto sin collation explícita
 
-**Diario de comparación / conclusión**
+```javascript
+d.nombres_clase.find({nombre:"ana"}).toArray()
+```
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+Según las reglas de comparación por defecto de la colección, no debemos suponer que `"ana"` y `"Ana"` son iguales. En este escenario esperamos no encontrar el documento cuyo nombre fue almacenado con mayúscula.
+
+### Paso 4. Aplicar una comparación lingüística
+
+```javascript
+d.nombres_clase.find({nombre:"ana"})
+ .collation({locale:"es",strength:2})
+ .toArray()
+```
+
+La opción `locale:"es"` utiliza reglas lingüísticas de español; `strength:2` permite una comparación que no distingue mayúsculas de minúsculas en este caso, manteniendo otras distinciones lingüísticas propias de la configuración.
+
+**Resultado esperado:** ahora podemos encontrar el documento `Ana`. No se modificó lo almacenado: cambiamos la regla de comparación aplicada a la consulta.
+
+### Paso 5. Crear un índice con esa misma collation
+
+```javascript
+d.nombres_clase.createIndex(
+  {nombre:1},
+  {
+    name:"ix_nombre_es",
+    collation:{locale:"es",strength:2}
+  }
+)
+```
+
+El índice está construido de acuerdo con unas reglas lingüísticas concretas. Eso implica una idea importante: **no cualquier consulta podrá aprovecharlo del mismo modo si utiliza una collation diferente**.
+
+### Paso 6. Comprobar el uso del índice
+
+```javascript
+d.nombres_clase.find({nombre:"ana"})
+ .collation({locale:"es",strength:2})
+ .hint("ix_nombre_es")
+ .explain("executionStats")
+```
+
+Busca en la salida si se utiliza el índice y cuántas claves se examinan. La colección contiene solo tres documentos, por lo que no esperamos demostrar una gran mejora temporal. Esta actividad trata de **semántica de comparación** y de compatibilidad entre consulta e índice.
+
+### Paso 7. Una restricción unique con comparación lingüística
+
+Imagina que dos registros no deben distinguirse únicamente por mayúsculas. En una colección independiente:
+
+```javascript
+d.nombres_unicos_clase.drop();
+d.nombres_unicos_clase.createIndex(
+  {nombre:1},
+  {
+    name:"ix_nombre_unico_es",
+    unique:true,
+    collation:{locale:"es",strength:2}
+  }
+);
+d.nombres_unicos_clase.insertOne({nombre:"Ana"});
+```
+
+Ahora intenta insertar un segundo documento con `nombre:"ana"`. **Resultado esperado:** la operación debe rechazarse por duplicado según la collation del índice único.
+
+La prueba es valiosa porque enseña que una regla de comparación también puede afectar a la integridad.
+
+### Paso 8. Explicar sin engaños
+
+No afirmes que `strength:2` sirve para resolver cualquier necesidad lingüística de cualquier idioma. Las reglas de mayúsculas, acentos, caracteres equivalentes y ordenación deben estudiarse en el contexto real.
+
+Para este ejercicio basta con argumentar:
+- por qué la consulta inicial no encontraba la cadena con mayúscula;
+- qué cambió al declarar la collation;
+- por qué el índice debe estar alineado con las reglas de comparación;
+- por qué un índice unique puede rechazar valores que un usuario considera equivalentes.
+
+### Pregunta de diseño
+
+Una empresa utiliza identificadores de producto que distinguen mayúsculas, pero los nombres de sus clientes no. ¿Aplicarías necesariamente la misma collation a ambos campos? Justifica la respuesta a partir de las reglas del negocio, no de una preferencia estética.
+
+---
+
+# Laboratorio 16 — Una búsqueda de subcadenas no es un índice de texto
+
+## El problema
+
+En el Laboratorio 3 utilizaste `$text` para buscar términos dentro de descripciones. Ahora otro compañero pide un buscador que encuentre cualquier fragmento escrito en medio de una palabra. Afirma que «si la base tiene un índice de texto, todas las búsquedas por letras deberían ser rápidas».
+
+Esta afirmación es incorrecta: **buscar palabras mediante un índice de texto clásico** y **buscar una secuencia arbitraria de caracteres** son problemas con semánticas y costes diferentes.
+
+### Paso 1. Preparar tres descripciones
+
+Utiliza una colección ficticia, sin alterar `ventas`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.descripcion_clase.drop();
+d.descripcion_clase.insertMany([
+  {_id:1,descripcion:"cafe premium en grano"},
+  {_id:2,descripcion:"cafetera para oficina"},
+  {_id:3,descripcion:"bicicleta urbana plegable"}
+]);
+```
+
+Piensa qué debería encontrar un usuario si escribe `cafe`, `cafet` o `premium`. ¿Consideramos coincidencia de palabra, prefijo de palabra o subcadena arbitraria?
+
+### Paso 2. Buscar por igualdad completa
+
+```javascript
+d.descripcion_clase.find({descripcion:"cafe"}).toArray()
+```
+
+**Resultado esperado:** no encuentra el documento uno, porque su descripción completa no es exactamente `cafe`. El filtro de igualdad compara el valor completo.
+
+### Paso 3. Buscar una secuencia mediante regex
+
+```javascript
+d.descripcion_clase.find({
+  descripcion:{$regex:"cafe",$options:"i"}
+}).toArray()
+```
+
+Ahora pedimos una expresión regular que busque la secuencia `cafe`, ignorando el caso de las letras. En estos datos puede localizar tanto `cafe premium` como `cafetera`.
+
+Eso no significa que la consulta vaya a aprovechar automáticamente un índice `text`. Una expresión regular no equivale a la búsqueda textual por términos.
+
+### Paso 4. Crear el índice textual
+
+```javascript
+d.descripcion_clase.createIndex(
+  {descripcion:"text"},
+  {name:"ix_texto_clase",default_language:"spanish"}
+);
+```
+
+El índice habilita las consultas mediante `$text`. No convierte todas las expresiones regulares en búsquedas optimizadas.
+
+### Paso 5. Ejecutar una consulta textual
+
+```javascript
+d.descripcion_clase.find({
+  $text:{$search:"premium"}
+}).toArray()
+```
+
+**Resultado esperado:** el documento que contiene `cafe premium en grano`. La operación busca el término de acuerdo con el índice de texto disponible.
+
+### Paso 6. Comparar planes sin falsear la equivalencia
+
+Puedes llamar a `explain("executionStats")` sobre la consulta regex y sobre la consulta `$text`. Pero **no las presentes como un antes/después del mismo problema**: las reglas de coincidencia son diferentes y, por tanto, la cantidad de resultados también puede cambiar.
+
+El objetivo es comprender:
+- qué resultado pide cada filtro;
+- qué estructura permite resolverlo;
+- cuándo una técnica no sustituye a la otra;
+- por qué necesitamos elegir el buscador a partir de requisitos reales.
+
+### Paso 7. Precauciones frente a sistemas de búsqueda más avanzados
+
+Un buscador corporativo puede necesitar corrección ortográfica, relevancia compleja, tolerancia a errores, sinónimos y análisis de idiomas. Los índices `text` clásicos permiten ciertos escenarios de búsqueda textual, pero no deben presentarse como equivalentes a todas las funciones de motores especializados o de MongoDB Search.
+
+### Evaluación final
+
+Una persona pide «todas las descripciones que contienen los caracteres `bic` en cualquier posición». Otra pide «documentos relacionados con la palabra bicicleta». ¿Por qué no resolverías automáticamente ambas necesidades con idéntica consulta? Explica qué significa cada petición y cómo comprobarías los resultados.
 
 
 ---
 
+# Laboratorio 17 — Índices y agregaciones: cuando la consulta se convierte en una secuencia de operaciones
 
-<!-- Hoja didáctica 13, ficha imprimible -->
-## Laboratorio 06 · Crear índice simple por cliente
-*Ejecución paso a paso*
+## Por qué no todas las consultas se escriben con find
 
-### Resultado profesional perseguido
+Hasta ahora hemos estudiado consultas con `find`, `sort` y `limit`. MongoDB también permite construir **pipelines de agregación**, que son secuencias de etapas por las que pasan los documentos.
 
-Comprobar nombre y campo del índice; evitar una creación duplicada.
+Un pipeline puede filtrar, ordenar, limitar, proyectar campos o realizar cálculos. Aprender índices implica saber reconocer cuándo una etapa inicial del pipeline puede beneficiarse de una estructura de acceso.
 
-### Dónde ejecutar y con qué preparación
+Vamos a buscar las últimas diez ventas pagadas, pero esta vez expresaremos la operación mediante etapas de agregación para entender que **el índice se relaciona con los filtros y el orden requerido, no con el nombre de la función que escribe el alumno**.
 
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
+### Paso 1. Preparar el servidor
 
-### Paso 1 · Abrir el shell del contenedor
+Desde la terminal del ordenador:
 
-```powershell
-docker compose exec -it mongo-indices mongosh
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-### Paso 2 · Seleccionar base y ejecutar
+Dentro de `mongosh` establece la referencia:
 
 ```javascript
-use curso_indices
-db.ventas.createIndex({clienteId:1},{name:"ix_cliente"})
-db.ventas.getIndexes()
+const c = db.getSiblingDB("curso_indices").ventas;
 ```
 
-### Precondición que cambia la interpretación
+Comprobar que la colección contiene datos evita investigar planes sobre una base vacía:
 
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
+```javascript
+c.countDocuments({})
+```
 
-### Evidencia concreta a registrar
+### Paso 2. Formular primero la consulta que ya conoces
 
-Comprobar nombre y campo del índice; evitar una creación duplicada. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
+```javascript
+c.find({estado:"pagada"})
+ .sort({fecha:-1})
+ .limit(10)
+ .toArray()
+```
 
-> **Si no obtienes el resultado:** En la segunda ejecución createIndex del mismo patrón puede reutilizarlo.
+Esta consulta filtra por estado, coloca las fechas más recientes primero y devuelve hasta diez resultados. Copia mentalmente su significado, no todos los documentos de salida.
 
-**Hoja para registrar salida real y conclusión**
+### Paso 3. Expresar lo mismo como pipeline
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+```javascript
+c.aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10}
+]).toArray()
+```
+
+Cada etapa recibe documentos de la etapa anterior:
+- `$match` descarta las ventas que no están pagadas.
+- `$sort` determina el orden por fecha.
+- `$limit` limita el número final de documentos.
+
+El resultado expresa la misma necesidad general, pero recuerda que **las fechas iguales pueden producir empates**. Dos planes sin criterio secundario de orden total pueden seleccionar diferentes documentos empatados en el límite.
+
+### Paso 4. Consultar el plan de agregación
+
+```javascript
+c.explain("executionStats").aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10}
+])
+```
+
+La salida puede contener varias estructuras y etapas. No esperes que el JSON sea idéntico al de `find().explain()`. Busca información sobre el acceso inicial a la colección, los índices elegidos y la posible ordenación.
+
+### Paso 5. Reconocer por qué importa colocar el filtro pronto
+
+Imagina un pipeline que primero prepara miles de resultados y después decide que solo necesita un estado. Puede trabajar más de lo necesario. MongoDB posee optimizaciones del pipeline que pueden reorganizar operaciones cuando la semántica lo permite, pero **no debemos confiar ciegamente en que cualquier secuencia mal planteada será óptima**.
+
+Explica por qué filtrar por `estado` antes de generar una gran salida suele ser una buena idea conceptual. Después revisa el plan real para ver cómo resolvió MongoDB la consulta.
+
+### Paso 6. Añadir una proyección
+
+```javascript
+c.aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10},
+  {$project:{_id:0,numero:1,fecha:1,importe:1}}
+]).toArray()
+```
+
+`$project` escoge los campos del resultado. Hemos decidido no mostrar detalles innecesarios. Eso **no significa automáticamente** que la consulta sea cubierta: necesitaríamos comprobar si el índice contiene todos los datos que exige la ejecución.
+
+### Paso 7. Relacionarlo con el índice compuesto
+
+Si existe el índice `{estado:1,fecha:-1,importe:1}` creado en la primera práctica, MongoDB dispone de un acceso potencialmente útil para filtrar por estado y recorrer fechas ordenadas.
+
+No crees un índice adicional solo porque cambiaste `find` por `aggregate`. La pregunta de negocio es esencialmente la misma.
+
+### Actividad
+
+Explica la diferencia entre estos tres conceptos:
+1. `$match` decide qué documentos cumplen una condición.
+2. `$sort` establece un orden.
+3. `$project` decide qué campos aparecen en el resultado.
+
+Indica cuál sería un índice candidato para una pantalla que filtra por estado y ordena por fecha, y qué comprobarías mediante `explain` antes de afirmar que ayuda.
+
+---
+
+# Laboratorio 18 — Un error lógico dentro de arrays puede producir resultados falsos
+
+## La situación
+
+Una venta puede contener varios productos. La empresa quiere buscar ventas que incluyan un producto de determinado SKU con una cantidad mínima.
+
+Ejemplo:
+
+```javascript
+{
+  productos:[
+    {sku:"SKU10",cantidad:1},
+    {sku:"SKU20",cantidad:3}
+  ]
+}
+```
+
+Una consulta que verifica `sku:"SKU10"` y `cantidad:3` por separado sobre elementos del array puede encontrar el documento, aunque **el producto SKU10 tenga solo cantidad uno**. Esto es un error de formulación de la pregunta, no de indexación.
+
+### Paso 1. Crear una colección de prueba
+
+En `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.productos_pedidos_clase.drop();
+d.productos_pedidos_clase.insertMany([
+  {_id:1,productos:[{sku:"SKU10",cantidad:1},{sku:"SKU20",cantidad:3}]},
+  {_id:2,productos:[{sku:"SKU10",cantidad:3}]},
+  {_id:3,productos:[{sku:"SKU30",cantidad:3}]}
+]);
+```
+
+La colección es pequeña para que podamos predecir manualmente el resultado. La venta uno no debe satisfacer la exigencia de **SKU10 con cantidad tres**, pero la venta dos sí.
+
+### Paso 2. Ensayar una consulta ambigua
+
+```javascript
+d.productos_pedidos_clase.find({
+  "productos.sku":"SKU10",
+  "productos.cantidad":3
+}).toArray()
+```
+
+¿Qué documentos aparecen? Observa que puede encontrarse tanto la venta uno como la dos, porque los predicados se satisfacen en elementos que no necesariamente son el mismo.
+
+### Paso 3. Exigir coincidencia dentro del mismo elemento
+
+```javascript
+d.productos_pedidos_clase.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).toArray()
+```
+
+**Resultado esperado:** solo el documento dos. `$elemMatch` obliga a aplicar las condiciones dentro de un mismo elemento del array.
+
+### Paso 4. Estudiar un índice que involucre campos del array
+
+```javascript
+d.productos_pedidos_clase.createIndex(
+  {"productos.sku":1,"productos.cantidad":1},
+  {name:"ix_productos_sku_cantidad"}
+)
+```
+
+En este modelo ambos campos están dentro del **mismo array de subdocumentos**, no en dos arrays paralelos independientes. MongoDB puede construir un índice compuesto multikey apropiado sujeto a las restricciones del modelo.
+
+### Paso 5. Leer el plan correcto
+
+```javascript
+d.productos_pedidos_clase.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).explain("executionStats")
+```
+
+Busca si utiliza el índice, cuántos documentos encuentra y cuántas entradas examina. No te obsesiones por medir milisegundos sobre tres documentos: la lección importante es **formular correctamente las condiciones y entender las restricciones de un array**.
+
+### Paso 6. Entender la limitación
+
+MongoDB no permite indiscriminadamente índices compuestos sobre varios campos que contienen **arrays independientes** en un mismo documento. La restricción evita combinaciones de claves difíciles de manejar y debe tenerse en cuenta en el diseño de esquemas.
+
+Si tu aplicación necesita indexar muchas relaciones complejas, quizá debas reconsiderar la estructura de documentos, no añadir índices cada vez más complicados sin conocer sus reglas.
+
+### Evaluación
+
+1. ¿Por qué la primera consulta puede encontrar el documento uno?
+2. ¿Qué condición adicional expresa `$elemMatch`?
+3. ¿Por qué indexar una consulta incorrecta no arregla su significado?
+4. ¿Por qué un multikey puede examinar más claves que documentos?
+5. ¿Qué comprobarías antes de crear un índice compuesto que involucre varios arrays?
 
 
 ---
 
+# Laboratorio 19 — ¿Qué índices existen, cuánto ocupan y se han utilizado?
 
-<!-- Hoja didáctica 14, ficha imprimible -->
-## Laboratorio 06 · Crear índice simple por cliente
-*Solución comentada y ampliación*
+## Un índice no vale por existir
 
-### Solución razonada
+Has aprendido a crear índices, pero un administrador también debe revisar si continúan siendo necesarios. Un índice puede ocupar espacio y mantenerse en cada escritura sin aportar utilidad significativa a las consultas reales.
 
-Al crear ix_cliente se añade una ruta de acceso, no un segundo campo a los documentos. Con getIndexes revisa tanto key como name. Después mide el filtro exacto por cliente; un índice creado sin comprobar su uso constituye una conclusión incompleta.
+En este ejercicio inspeccionaremos **definiciones, tamaño y contadores de uso**. No confundiremos esas observaciones con una decisión automática de borrar índices: una consulta muy importante puede ejecutarse pocas veces, y los contadores pueden reiniciarse.
 
-### Por qué ocurre
+### Paso 1. Comprobar la colección
 
-La clave clienteId identifica a un comprador, no una venta. En 200.000 filas sintéticas cada comprador aparece unas diez veces; por ello no debe crearse como unique. Tras crear ix_cliente, una búsqueda por clienteId debería inspeccionar una fracción pequeña, aunque siga leyendo documentos para devolver el resto de campos. Verifica además que el índice aparece con el nombre correcto en getIndexes() y que se utiliza con el filtro planteado, no con un filtro ajeno.
+En una terminal:
 
-### Qué no permite concluir
-
-En la segunda ejecución createIndex del mismo patrón puede reutilizarlo. Tras crear ix_cliente, el filtro por clienteId debería reducir notablemente totalDocsExamined; el índice no cubre campos de proyección ajenos a su clave.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809}).limit(5).explain("executionStats")
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-No uses una query por fecha para comprobar un índice que solo contiene clienteId. Debe existir correspondencia exacta entre la clave creada y los predicados que quieres estudiar.
+En `mongosh`:
 
-### Ejercicio de transferencia
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
+```
 
-Comparar lectura con coste de mantenimiento.
+Debe aparecer el volumen que cargaste. Si no hay documentos, la información sobre tamaño y uso será poco representativa.
 
-### Criterio de corrección de esta práctica
+### Paso 2. Enumerar los índices
 
-La corrección del ejercicio exige acreditar comprobar nombre y campo del índice; evitar una creación duplicada. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+```javascript
+c.getIndexes()
+```
 
-**Diario de comparación / conclusión**
+Para cada índice anota el nombre, la clave y opciones relevantes. Debes distinguir `_id_`, que MongoDB crea para el identificador del documento, de los índices secundarios creados en los laboratorios.
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
+### Paso 3. Examinar tamaños de índices
+
+```javascript
+const estadisticas = c.stats();
+printjson(estadisticas.indexSizes)
+```
+
+La propiedad `indexSizes` presenta información de tamaño por índice en el contexto de esas estadísticas. No interpretes una cifra sin sus unidades y sin conocer el conjunto de datos.
+
+¿Qué esperas observar si comparas una colección pequeña con otra que tiene un millón de documentos? No puedes prometer una proporción exacta, pero en general almacenar más entradas de índice requiere recursos adicionales.
+
+### Paso 4. Consultar estadísticas de acceso
+
+```javascript
+c.aggregate([{$indexStats:{}}]).toArray()
+```
+
+Esta etapa proporciona información sobre acceso a índices en el contexto de la instancia y su periodo de observación. Los contadores no son una prueba perfecta de utilidad a largo plazo: pueden reiniciarse por procesos del servidor y reflejan el trabajo observado durante una ventana.
+
+**Precaución:** un índice con cero accesos desde el último reinicio no tiene por qué ser inútil. Tal vez ayuda a una consulta mensual crítica que no se ejecutó durante la prueba.
+
+### Paso 5. Generar actividad conocida
+
+```javascript
+c.find({numero:1}).toArray()
+c.find({numero:100}).toArray()
+c.find({clienteId:809}).limit(10).toArray()
+```
+
+Vuelve a consultar `$indexStats`. Observa si aparecen accesos en los índices que el motor utilizó. Puedes contrastar el plan de cada consulta con `explain` para no atribuir todos los accesos al índice que imaginas.
+
+### Paso 6. Comparar coste y utilidad
+
+Un índice tiene, como mínimo, tres dimensiones:
+- **Lectura:** cuánto ayuda a los patrones de consulta importantes.
+- **Escritura:** cuánto trabajo agrega al actualizar documentos y claves.
+- **Almacenamiento:** cuánto espacio consume.
+
+No existe una regla general que permita sumar esas dimensiones sin conocer el uso real de la aplicación. Debes justificar por qué merece mantenerse cada estructura.
+
+### Paso 7. Elaborar una recomendación
+
+Elige un índice del laboratorio y completa:
+
+| Pregunta | Respuesta |
+|---|---|
+| Nombre y campos | ____ |
+| Consulta de negocio que atiende | ____ |
+| Plan observado | ____ |
+| Espacio observado | ____ |
+| Frecuencia o importancia conocida | ____ |
+| Riesgo de retirarlo | ____ |
+
+El informe debe poder leerlo otra persona y entender que **no propones borrar índices solo porque parecen grandes**.
+
+---
+
+# Laboratorio 20 — Restricciones de datos opcionales: cuándo unique general no representa la regla correcta
+
+## El problema
+
+Una empresa admite cuentas que aún no han proporcionado correo electrónico. Las cuentas que tienen correo deben utilizarlo de manera única. Una persona propone simplemente crear un índice único sobre `email` para toda la colección.
+
+Antes de ejecutar el comando debemos estudiar la diferencia entre:
+- el campo está presente con un correo válido;
+- el campo existe con valor `null`;
+- el campo está ausente.
+
+La decisión de negocio es: **permitimos muchos registros sin correo, pero no queremos dos cuentas con el mismo correo real**.
+
+### Paso 1. Crear datos opcionales
+
+En `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.correos_opcionales_clase.drop();
+d.correos_opcionales_clase.insertMany([
+  {_id:1,nombre:"Alumno A"},
+  {_id:2,nombre:"Alumno B"},
+  {_id:3,nombre:"Alumno C",email:"c@ejemplo.test"}
+]);
+```
+
+Tenemos dos alumnos sin `email` y uno con dirección válida. La colección se ha diseñado para esta práctica; no modifica datos empresariales.
+
+### Paso 2. Pensar antes de crear unique
+
+¿Qué pasaría si aplicamos una restricción de unicidad general al campo `email`? Debemos estudiar cómo MongoDB trata la ausencia del campo y `null` bajo ese tipo de índice.
+
+No demos por hecho que «campo ausente» queda siempre libre de restricciones. La semántica de los índices únicos necesita comprenderse.
+
+### Paso 3. Crear un índice parcial que represente la regla
+
+Una forma de expresar «aplicar la restricción a correos de tipo cadena» es:
+
+```javascript
+d.correos_opcionales_clase.createIndex(
+  {email:1},
+  {
+    name:"ix_email_texto_unico",
+    unique:true,
+    partialFilterExpression:{email:{$type:"string"}}
+  }
+)
+```
+
+Este índice solo incluye los documentos que cumplen el filtro declarado. En el ejemplo, los alumnos sin correo no forman parte del conjunto de claves sujetas a esa restricción.
+
+### Paso 4. Insertar otro alumno sin correo
+
+```javascript
+d.correos_opcionales_clase.insertOne({_id:4,nombre:"Alumno D"})
+```
+
+**Resultado esperado:** inserción permitida. La condición parcial no obliga a que todos tengan `email`.
+
+### Paso 5. Intentar un correo duplicado
+
+```javascript
+d.correos_opcionales_clase.insertOne({
+  _id:5,
+  nombre:"Alumno E",
+  email:"c@ejemplo.test"
+})
+```
+
+**Resultado esperado:** rechazo por clave duplicada. El correo `c@ejemplo.test` ya pertenece al alumno C.
+
+### Paso 6. Interpretar la regla real
+
+El índice no verifica que una cadena parezca un correo electrónico sintácticamente correcto. Por ejemplo, podría aceptar `email:"hola"` si es distinto. **Validar el formato y aplicar unicidad son responsabilidades diferentes**. La aplicación o el modelo de datos debe decidir qué valores son admisibles.
+
+### Paso 7. Preguntas de comprobación
+
+1. ¿Por qué dos documentos sin `email` pueden ser válidos para este negocio?
+2. ¿Qué diferencia hay entre no tener correo y repetir un correo real?
+3. ¿Por qué necesitamos `partialFilterExpression`?
+4. ¿Qué función no cumple este índice aunque sea unique?
+5. ¿Qué cambiaría si la empresa declarase `email` obligatorio para todas las cuentas?
+
+### Conclusión
+
+Un buen índice expresa una necesidad concreta. El principio no es «crear unique siempre que el campo parezca importante», sino **comprender la regla de negocio y comprobar los casos que debe permitir y prohibir**.
+
+---
+
+# Laboratorio 21 — Resolver un error de creación de índice sin perder datos
+
+## Caso de soporte
+
+Un alumno intenta crear un índice único y recibe un error. Decide borrar la colección y volver a empezar. Esa reacción puede ocultar el problema y, en una base real, destruir información valiosa.
+
+Vamos a aprender un procedimiento controlado para **diagnosticar por qué una estructura no puede crearse**.
+
+### Paso 1. Preparar una colección con un problema deliberado
+
+Dentro de `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.duplicados_clase.drop();
+d.duplicados_clase.insertMany([
+  {_id:1,codigo:"A"},
+  {_id:2,codigo:"B"},
+  {_id:3,codigo:"A"}
+]);
+```
+
+El código A aparece en dos documentos. Eso sería una violación de la regla «cada código debe ser único».
+
+### Paso 2. Intentar imponer una regla incompatible
+
+```javascript
+d.duplicados_clase.createIndex(
+  {codigo:1},
+  {unique:true,name:"ix_codigo_unico"}
+)
+```
+
+**Resultado esperado:** error de duplicidad. MongoDB no puede declarar que el conjunto cumple unicidad cuando los datos existentes ya la contradicen.
+
+El error no demuestra que Docker esté mal ni que MongoDB no admita índices unique.
+
+### Paso 3. Localizar la contradicción
+
+```javascript
+d.duplicados_clase.find({codigo:"A"}).toArray()
+```
+
+Deben aparecer los documentos uno y tres. No los borres todavía: primero entiende **qué dato contradice la regla**.
+
+### Paso 4. Elegir una resolución de negocio
+
+En una aplicación real no puedes decidir por tu cuenta cuál de dos registros duplicados debe eliminarse. Puede ser un dato legítimo, un error de importación o un identificador que necesita una regla diferente.
+
+En nuestra colección de práctica sí tenemos autorización para resolver el conflicto ficticio. Por ejemplo, podemos cambiar el código del documento tres:
+
+```javascript
+d.duplicados_clase.updateOne(
+  {_id:3},
+  {$set:{codigo:"C"}}
+)
+```
+
+Comprueba que ahora existen A, B y C.
+
+### Paso 5. Repetir la creación
+
+```javascript
+d.duplicados_clase.createIndex(
+  {codigo:1},
+  {unique:true,name:"ix_codigo_unico"}
+)
+```
+
+**Resultado esperado:** el índice se crea. Ahora una nueva inserción con código A debe fallar.
+
+### Paso 6. Explicar el ciclo completo
+
+1. Definimos una regla.
+2. MongoDB detectó datos que la incumplían.
+3. Identificamos los documentos problemáticos.
+4. Corregimos **solo** el conjunto de práctica conforme a la regla del ejercicio.
+5. Creamos el índice.
+6. Verificamos que la restricción rechazaba nuevos duplicados.
+
+**Nunca sustituyas este procedimiento por «borrar todo hasta que funcione».** En bases reales la corrección requiere decisiones del negocio y conservación de información.
+
+### Evaluación final
+
+Describe la diferencia entre el error de construir un índice unique sobre datos ya duplicados y el error de insertar un duplicado cuando el índice ya existe. ¿Qué protege MongoDB en cada caso?
 
 
 ---
 
+# Laboratorio 22 — Un índice puede ser correcto y aun así ayudar poco a una consulta
 
-<!-- Hoja didáctica 15, ficha imprimible -->
-## Laboratorio 07 · Comparar antes y después
-*Ejecución paso a paso*
+## El problema
 
-### Resultado profesional perseguido
+Has comprobado que buscar un número de venta por igualdad puede pasar de examinar muchísimos documentos a uno solo. Ahora la empresa pregunta «¿cuáles son todas las ventas pagadas?».
 
-Se espera IXSCAN sobre clienteId; totalDocsExamined baja mucho.
+¿Podemos esperar el mismo resultado? No. `numero` distingue una venta de las demás, pero `estado` contiene solamente unos pocos valores y miles de documentos comparten cada uno.
 
-### Dónde ejecutar y con qué preparación
+Esta práctica relaciona **cardinalidad, selectividad y número de resultados**.
 
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
+### Paso 1. Comprobar el tamaño de la colección
 
-### Paso 1 · Abrir el shell del contenedor
+Desde PowerShell o Bash:
 
-```powershell
-docker compose exec -it mongo-indices mongosh
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
 ```
 
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({clienteId:809}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Se espera IXSCAN sobre clienteId; totalDocsExamined baja mucho. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El tiempo medido no debe convertirse en una cifra de mejora universal.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 16, ficha imprimible -->
-## Laboratorio 07 · Comparar antes y después
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Para la comparación válida conserva clienteId y todos los demás parámetros. Escribe dos filas con docsExamined y keysExamined, no solo tiempos. El cambio esperado es pasar de explorar la colección a un acceso acotado, aunque el número de documentos devueltos permanezca igual.
-
-### Por qué ocurre
-
-nReturned cuenta resultados; totalDocsExamined cuenta exámenes de documentos; totalKeysExamined cuenta entradas de índices leídas. Si salen diez ventas y el motor examinó 200.000 documentos, hay potencial de optimización. Si examina solo diez claves pero diez documentos, la consulta es selectiva pero no cubierta. Si examina cien claves y cero documentos, puede estar cubierta pero seguir recorriendo claves adicionales. Cada contador describe un fenómeno distinto; comparar índices requiere leerlos juntos.
-
-### Qué no permite concluir
-
-El tiempo medido no debe convertirse en una cifra de mejora universal. nReturned bajo con docsExamined alto señala trabajo descartado; keysExamined alto con docsExamined cero puede ser consulta cubierta pero aun poco selectiva.
-
-### Contraste resuelto con un segundo escenario
+Dentro de `mongosh`:
 
 ```javascript
-db.ventas.find({clienteId:809}).explain("executionStats").executionStats
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
 ```
 
-Si nReturned es diez y docsExamined también diez, el acceso ya evita casi todo el escaneo. Un keysExamined de diez tampoco garantiza que el coste total de la petición sea cero.
+Anota el volumen existente. Si la colección está vacía, completa antes la carga de las ventas ficticias.
 
-### Ejercicio de transferencia
-
-Justificar qué métrica elegir para un informe técnico.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar se espera IXSCAN sobre clienteId; totalDocsExamined baja mucho. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 17, ficha imprimible -->
-## Laboratorio 08 · Rangos numéricos
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Repetir explain tras crear índice; observar cuantos valores coinciden.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
+### Paso 2. Contar ventas de un estado
 
 ```javascript
-use curso_indices
-db.ventas.find({importe:{$gte:650,$lt:660}}).explain("executionStats")
-db.ventas.createIndex({importe:1})
+c.countDocuments({estado:"pagada"})
 ```
 
-### Precondición que cambia la interpretación
+Compara el resultado con el número total de documentos. Si hay 200.000 ventas y unas 50.000 están pagadas, el filtro selecciona alrededor de una cuarta parte de la colección. No es comparable a buscar un identificador que aparece una sola vez.
 
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Repetir explain tras crear índice; observar cuantos valores coinciden. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Un rango ancho no necesariamente reduce trabajo suficiente.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 18, ficha imprimible -->
-## Laboratorio 08 · Rangos numéricos
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Medir el rango antes de crear {importe:1} muestra el trabajo sin ayuda de esa clave; después se espera reducción de candidatos si el rango es estrecho. Si amplías el rango a casi toda la distribución, el ahorro disminuye; explica por qué el planificador podría preferir otro acceso.
-
-### Por qué ocurre
-
-Un rango acota un intervalo: importe entre 650 y 660, por ejemplo. Si el índice empieza por un campo de igualdad y continúa por importe, el motor puede navegar hasta el límite inferior y parar en el superior. En cambio, si la condición selecciona casi todas las ventas, un COLLSCAN puede resultar competitivo. El objeto indexBounds del plan, cuando aparece, ayuda a ver qué intervalo se leyó. No confundas «el índice existe» con «los límites se aprovecharon».
-
-### Qué no permite concluir
-
-Un rango ancho no necesariamente reduce trabajo suficiente. El límite inferior o superior de importe aparece en indexBounds si existe clave aprovechable; los documentos devueltos no bastan para medir eficiencia.
-
-### Contraste resuelto con un segundo escenario
+### Paso 3. Revisar los índices disponibles
 
 ```javascript
-db.ventas.find({importe:{$gte:650,$lt:660}}).explain("executionStats")
+c.getIndexes()
 ```
 
-Un intervalo corto delimita pocos valores. Repite con {$gte:5,$lt:905}: el segundo intervalo contiene casi toda la distribución y la justificación del índice cambia.
+Comprueba que existe `ix_estado_fecha`, creado en la primera práctica por `03_crear_indices.js`. Si no existe, no estás trabajando en el estado de laboratorio esperado.
 
-### Ejercicio de transferencia
-
-Ampliar rango a 50-900 y comparar.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar repetir explain tras crear índice; observar cuantos valores coinciden. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 19, ficha imprimible -->
-## Laboratorio 09 · Filtros de cardinalidad baja
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Observar plan ganador; podría seleccionar índice o escaneo según coste.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
+### Paso 4. Medir una búsqueda con límite
 
 ```javascript
-use curso_indices
-db.ventas.find({estado:"pagada"}).explain("executionStats")
-db.ventas.createIndex({estado:1})
+c.find({estado:"pagada"})
+ .limit(20)
+ .explain("executionStats")
 ```
 
-### Precondición que cambia la interpretación
+Esta consulta pide **como máximo veinte resultados**, no todas las ventas pagadas. Examina las cifras reales. Un límite pequeño puede reducir el trabajo necesario, dependiendo de los accesos elegidos.
 
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Observar plan ganador; podría seleccionar índice o escaneo según coste. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** No afirmar que MongoDB está obligado a elegir ix_estado.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 20, ficha imprimible -->
-## Laboratorio 09 · Filtros de cardinalidad baja
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Estado tiene una cardinalidad baja. Un índice simple de estado quizá no sea el acceso más barato si la consulta solicita toda la información de un cuarto de ventas. No fuerces un plan ganador en la respuesta del alumno: anota el que aparezca y contrasta con explain.
-
-### Por qué ocurre
-
-En el generador, estado tiene cuatro valores y clienteId recorre 20.000 valores. Para 200.000 ventas caben aproximadamente 50.000 documentos en el primer filtro y diez en el segundo, porque la distribución es determinista. Un índice sobre estado no es necesariamente inútil: puede aportar la ordenación de una consulta compuesta o reducir el trabajo si solo se proyectan campos indexados. Para elegir, compara consultas reales, no etiquetas simplistas como «alta cardinalidad = bueno».
-
-### Qué no permite concluir
-
-No afirmar que MongoDB está obligado a elegir ix_estado. Con estado de cuatro valores puede ser razonable un escaneo extenso; con numero casi único, leer un tramo corto tiene una ventaja más clara.
-
-### Contraste resuelto con un segundo escenario
+### Paso 5. Medir una consulta sin límite
 
 ```javascript
-db.ventas.countDocuments({estado:"pagada"})
-db.ventas.countDocuments({clienteId:809})
+c.find({estado:"pagada"})
+ .explain("executionStats")
 ```
 
-La diferencia de órdenes de magnitud entre las dos cuentas muestra qué predicado discrimina más. Repite con un volumen distinto: las proporciones siguen siendo sintéticas y no describen necesariamente una empresa.
+Ahora pedimos todas las pagadas. Es posible que `nReturned` sea muy grande. Un índice no puede impedir que el usuario haya solicitado miles de documentos.
 
-### Ejercicio de transferencia
+No compares el tiempo de esta consulta con el paso anterior como si solamente hubieras cambiado el índice: **también eliminaste el límite** y cambiaste la cantidad de información solicitada.
 
-Comparar pagada con consulta más selectiva.
+### Paso 6. Examinar el índice compuesto
 
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar observar plan ganador; podría seleccionar índice o escaneo según coste. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 21, ficha imprimible -->
-## Laboratorio 10 · Ordenación y TOP N
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Buscar SORT o recorrido ordenado de índice.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
+En una consulta controlada puedes pedir explícitamente:
 
 ```javascript
-use curso_indices
-db.ventas.find({estado:"pagada"}).sort({fecha:-1}).limit(10).explain("executionStats")
+c.find({estado:"pagada"})
+ .hint("ix_estado_fecha")
+ .explain("executionStats")
 ```
 
-### Precondición que cambia la interpretación
+La función `hint` sirve aquí para estudiar el índice, no como regla de configuración permanente. Observa cuántas claves y documentos se recorren para devolver todas las pagadas. Puede haber miles de lecturas: eso no es automáticamente un defecto, dado el tamaño del conjunto solicitado.
 
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Buscar SORT o recorrido ordenado de índice. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Limit no significa ausencia automática de trabajo de ordenación.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 22, ficha imprimible -->
-## Laboratorio 10 · Ordenación y TOP N
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-limit(10) afecta a resultados devueltos, pero la ordenación puede requerir trabajo previo. El compuesto estado+fecha permite recorrer fechas recientes dentro de un estado. Comprueba si existe una fase SORT y si el plan elegido aprovecha el orden de la clave.
-
-### Por qué ocurre
-
-La consulta «10 pagadas más recientes» combina tres costes: encontrar pagadas, ordenar las coincidencias y devolver diez. Con un compuesto que preserve el orden se puede leer solo el tramo útil; sin él, el motor puede trabajar sobre muchos candidatos antes de entregar diez. Dibuja dos flujos: FILTRO → SORT → LIMIT frente a ACCESO INDEXADO ORDENADO → LIMIT. Una mejora de latencia no prueba por sí sola que se evitó ordenar: hay que comprobar el plan.
-
-### Qué no permite concluir
-
-Limit no significa ausencia automática de trabajo de ordenación. Una respuesta de diez resultados puede requerir ordenar cientos de miles de candidatos; el árbol revela si SORT persiste.
-
-### Contraste resuelto con un segundo escenario
+### Paso 7. Formular una consulta más selectiva
 
 ```javascript
-db.ventas.find({estado:"pagada"}).sort({fecha:-1}).limit(1).explain("executionStats")
+c.find({
+  estado:"pagada",
+  fecha:{$gte:ISODate("2025-10-01")}
+}).sort({fecha:-1}).limit(10).explain("executionStats")
 ```
 
-El top 1 es un buen caso para separar ordenación indexada de ordenar un conjunto enorme y después descartar filas. Identifica si la etapa SORT aparece.
+Ahora combinamos estado, fecha y límite. La pregunta ya no es «devuelve todas las pagadas»: solicita solamente diez de las pagadas recientes. El índice compuesto puede ofrecer un acceso más ajustado.
 
-### Ejercicio de transferencia
+### Paso 8. Interpretar sin concluir demasiado
 
-Añadir índice {estado:1,fecha:-1} y repetir.
+Completa:
 
-### Criterio de corrección de esta práctica
+| Consulta | Documentos devueltos | Documentos examinados | ¿Por qué? |
+|---|---:|---:|---|
+| Por número único | ____ | ____ | Alta selectividad |
+| Estado con límite 20 | ____ | ____ | Pocos resultados solicitados |
+| Todas las pagadas | ____ | ____ | Muchos resultados solicitados |
+| Estado y fecha con límite 10 | ____ | ____ | Filtro, ordenación y límite |
 
-La corrección del ejercicio exige acreditar buscar SORT o recorrido ordenado de índice. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
+**Conclusión que debes poder explicar:** que exista un índice útil no significa que cualquier consulta lea uno o dos documentos. El esfuerzo lógico depende también de la cantidad de resultados que se solicitan y de la selectividad de cada condición.
 
-**Diario de comparación / conclusión**
+### Evaluación
 
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 23, ficha imprimible -->
-## Laboratorio 11 · Compuesto con prefijo útil
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Confirmar que el patrón satisface el filtro y la ordenación.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({clienteId:1,fecha:-1})
-db.ventas.find({clienteId:809}).sort({fecha:-1}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Confirmar que el patrón satisface el filtro y la ordenación. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El índice compuesto tiene claves ordenadas primero por clienteId.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 24, ficha imprimible -->
-## Laboratorio 11 · Compuesto con prefijo útil
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-El compuesto agrupa primero clienteId. La consulta que filtra cliente y ordena fecha aprovecha ambos componentes; una consulta global solo por fecha no tiene el mismo prefijo. Verifica que el motor evita una ordenación adicional cuando el plan corresponde al compuesto.
-
-### Por qué ocurre
-
-Considera el compuesto {clienteId:1,fecha:-1}: primero agrupa ventas por comprador y solo dentro de cada comprador ordena por fecha reciente. El índice facilita tanto la igualdad por comprador como una consulta que añada fecha, pero no dispone de una ordenación global por fecha que prescinda de clienteId. Es la regla de prefijo: para seleccionar entradas con eficiencia se necesita comenzar por la primera parte de la clave. Distínguela del simple hecho de que una consulta pueda forzar un recorrido de ese índice.
-
-### Qué no permite concluir
-
-El índice compuesto tiene claves ordenadas primero por clienteId. El prefijo clienteId delimita la región útil del índice; una consulta solo por fecha no aprovecha el mismo prefijo delimitador.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({fecha:{$gte:ISODate("2025-01-01")}}).limit(10).explain("executionStats")
-```
-
-La condición anterior no contiene clienteId. Tener fecha como segundo elemento de una clave compuesta no equivale a poseer un índice global que comienza por fecha.
-
-### Ejercicio de transferencia
-
-Probar solo fecha y observar la limitación del prefijo.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar confirmar que el patrón satisface el filtro y la ordenación. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 25, ficha imprimible -->
-## Laboratorio 12 · Prefijo inexistente
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Leer el plan seleccionado; no asumir uso eficiente del índice {clienteId,fecha}.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({fecha:{$gte:ISODate("2025-06-01")}}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Leer el plan seleccionado; no asumir uso eficiente del índice {clienteId,fecha}. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** La existencia de otros índices previos puede influir en el plan.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 26, ficha imprimible -->
-## Laboratorio 12 · Prefijo inexistente
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-La prueba trata de impedir un error frecuente: «mi índice contiene fecha, luego toda consulta por fecha está optimizada». A falta del prefijo clienteId, el acceso puede ser poco selectivo. Si hay otros índices, explica su influencia y realiza un experimento con hint sin convertirlo en solución de producción.
-
-### Por qué ocurre
-
-Considera el compuesto {clienteId:1,fecha:-1}: primero agrupa ventas por comprador y solo dentro de cada comprador ordena por fecha reciente. El índice facilita tanto la igualdad por comprador como una consulta que añada fecha, pero no dispone de una ordenación global por fecha que prescinda de clienteId. Es la regla de prefijo: para seleccionar entradas con eficiencia se necesita comenzar por la primera parte de la clave. Distínguela del simple hecho de que una consulta pueda forzar un recorrido de ese índice.
-
-### Qué no permite concluir
-
-La existencia de otros índices previos puede influir en el plan. El prefijo clienteId delimita la región útil del índice; una consulta solo por fecha no aprovecha el mismo prefijo delimitador.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({fecha:{$gte:ISODate("2025-01-01")}}).limit(10).explain("executionStats")
-```
-
-La condición anterior no contiene clienteId. Tener fecha como segundo elemento de una clave compuesta no equivale a poseer un índice global que comienza por fecha.
-
-### Ejercicio de transferencia
-
-Inventariar índices y aislar hipótesis usando hint cuando corresponda.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar leer el plan seleccionado; no asumir uso eficiente del índice {clienteId,fecha}. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 27, ficha imprimible -->
-## Laboratorio 13 · Estrategia ESR paso a paso
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comprobar sort y límites del índice en el explain.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({estado:1,fecha:-1,importe:1},{name:"ix_esr"})
-db.ventas.find({estado:"pagada",importe:{$gt:500}}).sort({fecha:-1}).limit(20).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comprobar sort y límites del índice en el explain. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** ESR es una heurística: medir claves examinadas, no solo ausencia de SORT.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 28, ficha imprimible -->
-## Laboratorio 13 · Estrategia ESR paso a paso
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-ESR no es una fórmula mágica. En {estado,fecha,importe}, el filtro de estado y la ordenación por fecha pueden mejorar la entrega de los primeros resultados. El rango de importe se evalúa dentro de ese orden. Registra cuántas claves se leen hasta encontrar suficientes ventas.
-
-### Por qué ocurre
-
-ESR significa Igualdad, Sort, Rango. La clave {estado:1,fecha:-1,importe:1} puede satisfacer estado=pagada, producir fechas ordenadas y evaluar importe. Pero si importe>=890 deja muy pocos resultados, situar importe antes de fecha puede leer muchas menos claves aun a costa de una fase SORT. Ese es el motivo por el que ESR es un punto de partida y no un dogma. El informe debe mostrar keysExamined, docsExamined y la presencia de SORT.
-
-### Qué no permite concluir
-
-ESR es una heurística: medir claves examinadas, no solo ausencia de SORT. Si fecha satisface sort y importe es rango posterior, es posible ahorrar SORT aunque se examinen más claves; un ERS selectivo puede resultar mejor.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({estado:"pagada",importe:{$gte:890}}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-Con rango muy selectivo, una clave estado-importe-fecha puede encontrar pocos registros; con estado-fecha-importe se preserva otra ventaja. La respuesta depende de las estadísticas y de cuántos resultados quieres devolver.
-
-### Ejercicio de transferencia
-
-Contrastar ERS en consulta altamente selectiva.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comprobar sort y límites del índice en el explain. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 29, ficha imprimible -->
-## Laboratorio 14 · Estrategia ERS comparada
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comparar keysExamined y si necesita SORT.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({estado:1,importe:1,fecha:-1})
-db.ventas.find({estado:"pagada",importe:{$gt:850}}).sort({fecha:-1}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comparar keysExamined y si necesita SORT. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Un rango temprano puede mejorar selección pero romper ordenación global.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 30, ficha imprimible -->
-## Laboratorio 14 · Estrategia ERS comparada
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-En ERS se prioriza importe como rango después de estado. Con umbral muy alto se puede reducir el tramo leído, pero ya no se obtiene automáticamente un orden global por fecha de todas esas cantidades. Compara ambos diseños sobre idéntico predicado y escribe la razón de la elección.
-
-### Por qué ocurre
-
-ESR significa Igualdad, Sort, Rango. La clave {estado:1,fecha:-1,importe:1} puede satisfacer estado=pagada, producir fechas ordenadas y evaluar importe. Pero si importe>=890 deja muy pocos resultados, situar importe antes de fecha puede leer muchas menos claves aun a costa de una fase SORT. Ese es el motivo por el que ESR es un punto de partida y no un dogma. El informe debe mostrar keysExamined, docsExamined y la presencia de SORT.
-
-### Qué no permite concluir
-
-Un rango temprano puede mejorar selección pero romper ordenación global. Si fecha satisface sort y importe es rango posterior, es posible ahorrar SORT aunque se examinen más claves; un ERS selectivo puede resultar mejor.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({estado:"pagada",importe:{$gte:890}}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-Con rango muy selectivo, una clave estado-importe-fecha puede encontrar pocos registros; con estado-fecha-importe se preserva otra ventaja. La respuesta depende de las estadísticas y de cuántos resultados quieres devolver.
-
-### Ejercicio de transferencia
-
-Elegir índice ganador justificando coste y frecuencia.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comparar keysExamined y si necesita SORT. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 31, ficha imprimible -->
-## Laboratorio 15 · Covered query consciente
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Buscar totalDocsExamined=0 si el plan elegido cubre consulta.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({clienteId:809},{_id:0,clienteId:1,fecha:1}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Buscar totalDocsExamined=0 si el plan elegido cubre consulta. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Si el optimizador elige otro índice, probar hint al compuesto pertinente.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 32, ficha imprimible -->
-## Laboratorio 15 · Covered query consciente
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-La proyección {_id:0,clienteId:1,fecha:1} busca cobertura con {clienteId,fecha}. Si el motor utiliza la clave correcta y totalDocsExamined es cero, hay evidencia de una consulta cubierta. Agregar descripcion exige recuperar documentos; verifica que esa etapa reaparece.
-
-### Por qué ocurre
-
-Una consulta cubierta exige que el índice proporcione tanto la condición como todos los campos devueltos. Con {clienteId:1,fecha:-1}, proyectar exclusivamente clienteId y fecha, excluyendo _id, puede resolverse sin leer documentos. Si agregas descripcion, aparece la necesidad de FETCH. El indicador decisivo es totalDocsExamined=0, junto con un plan compatible; nReturned puede ser mayor que cero. Una consulta cubierta no implica que solo se examinen las claves necesarias para los resultados.
-
-### Qué no permite concluir
-
-Si el optimizador elige otro índice, probar hint al compuesto pertinente. Excluir _id y devolver exclusivamente clienteId y fecha permite, si se elige el compuesto, totalDocsExamined=0; agregar descripcion rompe la cobertura.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809},{_id:0,clienteId:1,fecha:1}).explain("executionStats")
-```
-
-En una consulta cubierta la lectura de documentos puede quedar en cero. Añade descripcion a la proyección y contrasta con el caso anterior sin cambiar filtro.
-
-### Ejercicio de transferencia
-
-Añadir descripcion a proyección y observar FETCH.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar buscar totalDocsExamined=0 si el plan elegido cubre consulta. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 33, ficha imprimible -->
-## Laboratorio 16 · Explicar el árbol de ejecución
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Distinguir winningPlan, inputStages e indexName según motor de ejecución.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-const e=db.ventas.find({clienteId:809}).explain("executionStats");
-printjson({queryPlanner:e.queryPlanner,stats:e.executionStats})
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Distinguir winningPlan, inputStages e indexName según motor de ejecución. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Las representaciones de stage pueden variar con SBE y versión.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 34, ficha imprimible -->
-## Laboratorio 16 · Explicar el árbol de ejecución
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Separa plan ganador y estadísticas. Una estructura SBE puede mostrar el índice en rutas distintas a las de planes clásicos. La lectura razonada identifica indexName, FILTER/IXSCAN/FETCH/SORT si aparecen y luego los contadores. Copiar un JSON entero sin interpretación no acredita el objetivo.
-
-### Por qué ocurre
-
-COLLSCAN y IXSCAN nombran recorridos; FETCH señala recuperación de documentos. En explain puede verse FETCH encima de IXSCAN: significa que el índice orienta el acceso y los documentos se leen para terminar de resolver filtro o proyección. Un plan no es una cadena plana: puede haber ramas y etapas diferentes, especialmente con el motor de ejecución SBE de versiones modernas. Enseña a localizar indexName y los contadores, no a memorizar una captura específica de otro lanzamiento.
-
-### Qué no permite concluir
-
-Las representaciones de stage pueden variar con SBE y versión. En un plan INDEX_SCAN+FETCH, las claves examinadas no deben confundirse con documentos leídos: ambas cantidades contestan preguntas distintas.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).explain("executionStats")
-```
-
-La presencia de IXSCAN no implica que el filtro estado esté también resuelto por el mismo índice. Un FETCH puede aplicar parte del filtro sobre documentos recuperados.
-
-### Ejercicio de transferencia
-
-Localizar todas las subetapas que recuperan documentos.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar distinguir winningPlan, inputStages e indexName según motor de ejecución. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 35, ficha imprimible -->
-## Laboratorio 17 · Experimentar con hint
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comparar usando un índice fijo.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({clienteId:809}).hint({clienteId:1}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comparar usando un índice fijo. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** hint es diagnóstico controlado, no remedio permanente.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 36, ficha imprimible -->
-## Laboratorio 17 · Experimentar con hint
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Con hint, una clave elegida por el usuario sustituye el criterio del planificador para el experimento. El mismo filtro puede rendir peor con un índice menos selectivo. Anota la diferencia y explica por qué el código de aplicación normalmente no debería perpetuar ese hint.
-
-### Por qué ocurre
-
-hint resulta útil para comparar un candidato con otro sin depender de la decisión del planificador. Solo tiene sentido si el índice existe y el filtro puede interpretarse adecuadamente. Forzar un acceso malo puede elevar muchísimo el trabajo. Enseña a retirar hint antes de trasladar una consulta a código de aplicación: una pista fija que hoy funciona puede bloquear mejoras después de que cambien los datos, el motor o la distribución.
-
-### Qué no permite concluir
-
-hint es diagnóstico controlado, no remedio permanente. Forzar clienteId:1 solo tiene sentido cuando la clave existe; explica si el plan impuesto coincide con la elección espontánea del optimizador.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809}).hint({clienteId:1}).explain("executionStats")
-```
-
-Esta orden fija el camino de acceso y permite contrastarlo con la selección espontánea. Si el optimizador elige otro plan, discute por qué las condiciones de la consulta lo favorecen.
-
-### Ejercicio de transferencia
-
-Registrar cuándo el optimizador habría elegido otra ruta.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comparar usando un índice fijo. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 37, ficha imprimible -->
-## Laboratorio 18 · Multikey con etiquetas
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Observar isMultiKey cuando aparezca y entradas del índice.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({etiquetas:1},{name:"ix_etiquetas"})
-db.ventas.find({etiquetas:"urgente"}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Observar isMultiKey cuando aparezca y entradas del índice. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** La indexación multikey ocurre automáticamente con arrays.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 38, ficha imprimible -->
-## Laboratorio 18 · Multikey con etiquetas
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-El índice de etiquetas se vuelve multikey al indexar un array. Aunque una venta tenga varias etiquetas, MongoDB devuelve un documento una sola vez para una coincidencia. Analiza la diferencia entre entradas del índice y documentos de salida, y comprueba isMultiKey si la representación lo muestra.
-
-### Por qué ocurre
-
-El campo etiquetas guarda varios valores; al indexarlo, MongoDB crea entradas asociadas a cada valor distinto del array. Un documento etiquetado como venta, web y urgente puede originar varias claves, pero el resultado lógico de find no debe aparecer triplicado. Observa isMultiKey donde esté disponible. El coste no depende solo de cuántos documentos hay, también de cuántos elementos contienen sus arrays. Una actualización de etiquetas puede modificar varias entradas.
-
-### Qué no permite concluir
-
-La indexación multikey ocurre automáticamente con arrays. Un índice sobre etiquetas genera entradas para elementos del array; observar isMultiKey y confirmar que una venta coincidente se devuelve una sola vez.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({etiquetas:"web"}).limit(10).explain("executionStats")
-```
-
-La coincidencia de una etiqueta no debe duplicar una venta aunque el array tenga varias etiquetas. Revisa el documento real y diferencia los elementos del array de las entradas del índice.
-
-### Ejercicio de transferencia
-
-Analizar por qué un documento con dos etiquetas no se duplica en la salida.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar observar isMultiKey cuando aparezca y entradas del índice. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 39, ficha imprimible -->
-## Laboratorio 19 · Multikey y arrays anidados
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comprobar índice compuesto con un array y un escalar.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.multikey_demo.insertMany([{a:[1,2],b:"X"},{a:[2,3],b:"Y"}])
-db.multikey_demo.createIndex({a:1,b:1})
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comprobar índice compuesto con un array y un escalar. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** No convertir el laboratorio en permiso para múltiples campos array simultáneos.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 40, ficha imprimible -->
-## Laboratorio 19 · Multikey y arrays anidados
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Un array junto a un escalar es un escenario válido para un compuesto multikey. Dos campos array en el mismo documento bajo una clave compuesta pueden disparar la limitación de parallel arrays. El segundo intento es una prueba negativa deliberada y debe realizarse en la colección de demostración.
-
-### Por qué ocurre
-
-Un índice compuesto puede combinar un array y un campo escalar, por ejemplo {etiquetas:1,estado:1}. Sin embargo, los índices compuestos multikey tienen restricciones si hay arrays paralelos en varios campos del mismo documento. No construyas un ejercicio que falle sin explicarlo: crea antes un documento con a:[1,2] y b:"X"; después ensaya de forma aislada un segundo documento donde a y b sean arrays y captura el error. La restricción afecta al modelo de documentos admitido por ese índice.
-
-### Qué no permite concluir
-
-No convertir el laboratorio en permiso para múltiples campos array simultáneos. Un compuesto puede tener un campo array y otros escalares; múltiples campos array del mismo documento pueden activar la limitación parallel arrays.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.multikey_demo.insertOne({a:[1,2],b:["X","Y"]})
-```
-
-Con un compuesto sobre a y b, este intento puede provocar error de arrays paralelos. Es una prueba negativa de esquema; debe realizarse en colección separada y capturar el error, no romper ventas.
-
-### Ejercicio de transferencia
-
-Intentar un modelo con a y b arrays en otro documento y capturar el error.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comprobar índice compuesto con un array y un escalar. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 41, ficha imprimible -->
-## Laboratorio 20 · Búsqueda textual clásica
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Localizar descripciones y distinguir `$text` de regex.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({descripcion:"text"},{name:"ix_descripcion_texto",default_language:"spanish"})
-db.ventas.find({$text:{$search:"bicicleta"}}).limit(5)
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Localizar descripciones y distinguir `$text` de regex. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Una sola colección acepta restricciones específicas de índices text clásicos.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 42, ficha imprimible -->
-## Laboratorio 20 · Búsqueda textual clásica
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-La búsqueda $text requiere el índice de texto que la soporta; un like SQL no es su equivalente. Comprueba que devuelve documentos con términos coincidentes y registra qué campo se indexó. Un texto de búsqueda ausente puede producir cero resultados sin significar un error de índice.
-
-### Por qué ocurre
-
-El índice text clásico crea una representación de términos, no de cualquier subcadena. Una búsqueda de «bicicleta» sobre descripcion se parece a buscar palabras en un índice invertido. Stemming y reglas lingüísticas pueden variar por default_language; no esperes que coincida siempre un fragmento a mitad de palabra. Una colección autogestionada dispone de las limitaciones propias del índice text; Atlas Search es una tecnología diferente y no se obtiene automáticamente por usar $text.
-
-### Qué no permite concluir
-
-Una sola colección acepta restricciones específicas de índices text clásicos. La búsqueda $text requiere un índice de tipo text en esta colección; puede aplicar stemming según idioma y no equivale a buscar subcadenas.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({$text:{$search:"cafe"}},{_id:0,descripcion:1}).limit(5)
-```
-
-La búsqueda por término devuelve descripciones que contienen vocabulario relacionado según el analizador, no todos los textos que incluyen literalmente una cadena de caracteres arbitraria.
-
-### Ejercicio de transferencia
-
-Probar palabras con y sin tildes y comentar stemming.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar localizar descripciones y distinguir `$text` de regex. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 43, ficha imprimible -->
-## Laboratorio 21 · Relevancia por textScore
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comparar ranking y términos de búsqueda.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({$text:{$search:"bicicleta cafe"}},{_id:0,descripcion:1,puntuacion:{$meta:"textScore"}}).sort({puntuacion:{$meta:"textScore"}}).limit(5)
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comparar ranking y términos de búsqueda. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El score no es probabilidad absoluta ni ranking de Atlas Search.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 44, ficha imprimible -->
-## Laboratorio 21 · Relevancia por textScore
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-textScore funciona como criterio de ranking dentro del resultado $text actual. No compares scores de consultas distintas como probabilidades absolutas. Introduce dos documentos de demo con distinta presencia de términos y explica qué evidencia respalda una variación del orden.
-
-### Por qué ocurre
-
-textScore ofrece una puntuación de relevancia para coincidencias de $text. No es una probabilidad, ni una distancia, ni equivale a la puntuación de Atlas Search. Si cambias el texto de búsqueda cambias también el contexto en que se interpreta el score. Proyecta la puntuación con {$meta:"textScore"} y ordénala con el mismo metadato. Compara dos descripciones, una con un término y otra con varios, sin prometer un valor numérico concreto.
-
-### Qué no permite concluir
-
-El score no es probabilidad absoluta ni ranking de Atlas Search. El resultado de $meta textScore solo es comparable dentro de la búsqueda realizada; ordenar por score no sustituye un índice ordenado convencional.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({$text:{$search:"cafe bicicleta"}},{descripcion:1,p:{$meta:"textScore"}}).sort({p:{$meta:"textScore"}}).limit(3)
-```
-
-La relevancia se interpreta dentro de esta consulta y de estos términos. El score sirve para ordenar, pero no puede expresarse como probabilidad de que el documento sea «correcto». 
-
-### Ejercicio de transferencia
-
-Introducir descripción con repetición de términos y estudiar relevancia.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comparar ranking y términos de búsqueda. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 45, ficha imprimible -->
-## Laboratorio 22 · Geoespacial 2dsphere
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Validar que se recuperan puntos en radio dado.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({ubicacion:"2dsphere"},{name:"ix_ubicacion"})
-db.ventas.find({ubicacion:{$near:{$geometry:{type:"Point",coordinates:[-3.70,40.42]},$maxDistance:1000}}}).limit(5)
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Validar que se recuperan puntos en radio dado. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El orden GeoJSON es longitud antes que latitud.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 46, ficha imprimible -->
-## Laboratorio 22 · Geoespacial 2dsphere
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-El índice 2dsphere permite la búsqueda $near por ubicación GeoJSON. Confirma que coordinates lleva [longitud,latitud] y que $maxDistance se interpreta en metros. El contador de resultados puede cambiar al ampliar radio; no lo confundas con un cambio en la calidad del índice.
-
-### Por qué ocurre
-
-GeoJSON representa un punto como {type:"Point", coordinates:[longitud,latitud]}. Invertir ese orden es un error frecuente porque muchas interfaces enseñan primero latitud. Un índice 2dsphere interpreta geometría sobre la superficie terrestre y habilita ciertas consultas de proximidad. La validez geográfica y la exactitud de las coordenadas son parte del experimento: no basta con que la estructura JSON sea sintácticamente correcta. Usa puntos sintéticos, no geolocalización privada.
-
-### Qué no permite concluir
-
-El orden GeoJSON es longitud antes que latitud. 2dsphere acepta puntos GeoJSON válidos; la latitud y longitud intercambiadas cambian el lugar geográfico, no son un detalle tipográfico.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.findOne({}, {ubicacion:1,_id:0})
-```
-
-El orden de las coordenadas del punto es [longitud,latitud]. Verificar el dato antes de crear el índice evita atribuir a MongoDB un error que en realidad está en la geometría.
-
-### Ejercicio de transferencia
-
-Cambiar radio de 200 a 2000 metros.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar validar que se recuperan puntos en radio dado. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 47, ficha imprimible -->
-## Laboratorio 23 · Índice hashed
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comprobar accesos de igualdad y limitación conceptual de rangos.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({idGrupo:"hashed"},{name:"ix_grupo_hash"})
-db.ventas.find({idGrupo:123}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Los índices ya construidos pueden influir en el plan ganador; comprueba getIndexes antes de inferir la causa.
-
-### Evidencia concreta a registrar
-
-Comprobar accesos de igualdad y limitación conceptual de rangos. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Una clave hashed no preserva orden del valor original.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 48, ficha imprimible -->
-## Laboratorio 23 · Índice hashed
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Hashed apoya igualdad pero no conserva el orden numérico que un rango requiere. Compara find({idGrupo:123}) con una búsqueda de 100 a 200 y justifica por qué un árbol de hashes no es un índice ordenado de idGrupo.
-
-### Por qué ocurre
-
-Una clave hashed registra un hash del valor; favorece ciertos escenarios de distribución, especialmente relacionados con sharding. Como el hash destruye el orden natural, no sirve para resolver rangos de idGrupo como lo haría un índice ascendente. Una consulta de igualdad sí puede utilizarlo. No presentes hashed como «índice más rápido» ni como función de seguridad criptográfica de contraseñas: resuelve un problema de distribución y acceso por igualdad.
-
-### Qué no permite concluir
-
-Una clave hashed no preserva orden del valor original. El hash dispersa valores con proximidad numérica; una comparación por rango no conserva el orden y no puede sacar la misma ventaja.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({idGrupo:{$gte:100,$lte:200}}).explain("executionStats")
-```
-
-El índice hashed sirve para igualdad, pero los hashes de 100 y 200 no delimitan una secuencia ordenada de los valores intermedios.
-
-### Ejercicio de transferencia
-
-Probar idGrupo entre 100 y 200 sin prometer aceleración.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comprobar accesos de igualdad y limitación conceptual de rangos. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 49, ficha imprimible -->
-## Laboratorio 24 · Unicidad sin interferir con ventas
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Comprobar que el primer insert funciona y el índice es unique.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.facturas_demo.drop()
-db.facturas_demo.createIndex({codigo:1},{unique:true})
-db.facturas_demo.insertOne({codigo:"F-001"})
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Comprobar que el primer insert funciona y el índice es unique. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** No usar la colección de ventas para ensayos destructivos de unicidad.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 50, ficha imprimible -->
-## Laboratorio 24 · Unicidad sin interferir con ventas
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-El índice único se crea antes de insertar en facturas_demo. Comprueba que la primera factura entra y que la segunda inserción duplicada falla. La colección ventas no debe alterarse para demostrar un error de integridad de facturas.
-
-### Por qué ocurre
-
-unique convierte la integridad de datos en una regla atómica del servidor. Si ya existe codigo F-001, intentar insertar otra factura con el mismo valor debe fallar con E11000. No intentes observar el error insertando datos duplicados en ventas, porque perjudicarías los demás laboratorios. Usa facturas_demo. Antes de construir unique sobre datos existentes hay que detectar duplicados y decidir cómo resolverlos. La unicidad tampoco sustituye una política de autorización.
-
-### Qué no permite concluir
-
-No usar la colección de ventas para ensayos destructivos de unicidad. El intento de crear clave duplicada bajo unique debe producir E11000. El alumno debe comprobar que la segunda operación no insertó el documento.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-try {db.facturas_demo.insertOne({codigo:"F-001"})} catch(e) {print(e.code)}
-```
-
-El conflicto 11000 es intencional si F-001 ya existe bajo la restricción. Si no falla, revisa primero que la colección y el índice unique se prepararon como estaba indicado.
-
-### Ejercicio de transferencia
-
-Intentar un segundo F-001 dentro de try/catch.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar comprobar que el primer insert funciona y el índice es unique. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 51, ficha imprimible -->
-## Laboratorio 25 · Doble clave y error E11000
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Identificar el código 11000 como integridad, no conectividad.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-try { db.facturas_demo.insertOne({codigo:"F-001"}); } catch(e) {print(e.code)}
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Identificar el código 11000 como integridad, no conectividad. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** La restricción se aplica en el servidor incluso si el cliente no valida.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 52, ficha imprimible -->
-## Laboratorio 25 · Doble clave y error E11000
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-E11000 confirma que la unicidad se verificó en el servidor. Captura el código, no solo el texto del mensaje, que puede variar. Después verifica countDocuments({codigo:"F-001"}) para demostrar que no hubo una segunda factura insertada.
-
-### Por qué ocurre
-
-unique convierte la integridad de datos en una regla atómica del servidor. Si ya existe codigo F-001, intentar insertar otra factura con el mismo valor debe fallar con E11000. No intentes observar el error insertando datos duplicados en ventas, porque perjudicarías los demás laboratorios. Usa facturas_demo. Antes de construir unique sobre datos existentes hay que detectar duplicados y decidir cómo resolverlos. La unicidad tampoco sustituye una política de autorización.
-
-### Qué no permite concluir
-
-La restricción se aplica en el servidor incluso si el cliente no valida. El intento de crear clave duplicada bajo unique debe producir E11000. El alumno debe comprobar que la segunda operación no insertó el documento.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-try {db.facturas_demo.insertOne({codigo:"F-001"})} catch(e) {print(e.code)}
-```
-
-El conflicto 11000 es intencional si F-001 ya existe bajo la restricción. Si no falla, revisa primero que la colección y el índice unique se prepararon como estaba indicado.
-
-### Ejercicio de transferencia
-
-Crear unique compuesto por tienda y referencia.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar identificar el código 11000 como integridad, no conectividad. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 53, ficha imprimible -->
-## Laboratorio 26 · Índices parciales
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Revisar si el filtro de la consulta implica el filtro parcial.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.createIndex({clienteId:1},{name:"ix_cliente_pagada",partialFilterExpression:{estado:"pagada"}})
-db.ventas.find({clienteId:809,estado:"pagada"}).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Revisar si el filtro de la consulta implica el filtro parcial. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El optimizador no puede usar ese índice para todas las ventas de un cliente.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 54, ficha imprimible -->
-## Laboratorio 26 · Índices parciales
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-La consulta que incluye estado=pagada es compatible con el filtro parcial, mientras que la consulta sin estado no queda representada completamente en ese índice. La prueba demuestra corrección además de reducción de tamaño: nunca optimizar si ello puede excluir resultados válidos.
-
-### Por qué ocurre
-
-Un índice partial almacena solo documentos que cumplen partialFilterExpression. Una búsqueda puede aprovecharlo si sus condiciones garantizan que todos los resultados están dentro de esa fracción. Si la consulta no exige estado=pagada, utilizar un índice que solo contiene pagadas perdería datos: el planificador no debe considerarlo suficiente. Sparse es un mecanismo diferente, basado en presencia del campo. Diseña la regla a partir del patrón de consultas, no solo del tamaño deseado.
-
-### Qué no permite concluir
-
-El optimizador no puede usar ese índice para todas las ventas de un cliente. El plan puede emplear el índice parcial si la consulta restringe estado=pagada; si omite estado, ese índice no representa el conjunto completo.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).explain("executionStats")
-```
-
-Para utilizar la versión parcial de un índice por cliente, el predicado debe garantizar pertenencia al subconjunto pagado. El planificador evita resultados incompletos.
-
-### Ejercicio de transferencia
-
-Comparar sin filtro de estado.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar revisar si el filtro de la consulta implica el filtro parcial. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 55, ficha imprimible -->
-## Laboratorio 27 · TTL y fechas BSON
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Verificar que creadoEn sea BSON Date.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.sesiones_demo.drop()
-db.sesiones_demo.createIndex({creadoEn:1},{expireAfterSeconds:60})
-db.sesiones_demo.insertOne({tipo:"caducado",creadoEn:new Date(Date.now()-120000)})
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Verificar que creadoEn sea BSON Date. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El monitor TTL trabaja periódicamente; la eliminación puede tardar.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 56, ficha imprimible -->
-## Laboratorio 27 · TTL y fechas BSON
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-La marca creadoEn debe ser BSON Date. El documento creado hace dos minutos ya es elegible con TTL de 60 segundos, pero la eliminación no tiene instante exacto. Comprueba primero que fue insertado y, tras esperar, inspecciona el monitor mediante las observaciones repetidas.
-
-### Por qué ocurre
-
-TTL automatiza eliminación eventual de documentos expirados, como tokens o sesiones de demostración. No es una agenda exacta al segundo: un monitor en segundo plano selecciona documentos elegibles y puede retrasarse. Un índice TTL convencional es de un solo campo sobre fechas BSON; no utilices strings que parezcan fechas. Nunca apliques TTL accidentalmente a ventas que deban conservarse por obligación legal. La política de retención es una decisión de negocio y de cumplimiento, no un truco de rendimiento.
-
-### Qué no permite concluir
-
-El monitor TTL trabaja periódicamente; la eliminación puede tardar. El monitor TTL elimina documentos elegibles en segundo plano. La observación correcta es eventual, no una promesa de borrado al cumplir exacto sesenta segundos.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.sesiones_demo.getIndexes()
-```
-
-Comprueba que expireAfterSeconds pertenece al índice apropiado y que el campo almacena fechas. La eliminación es por caducidad, no una orden directa de deleteMany.
-
-### Ejercicio de transferencia
-
-Consultar countDocuments y repetir transcurrido el intervalo.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar verificar que creadoEn sea BSON Date. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 57, ficha imprimible -->
-## Laboratorio 28 · TTL: conservar documento reciente
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Verificar que un documento reciente permanece al principio.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.sesiones_demo.insertOne({tipo:"reciente",creadoEn:new Date()})
-db.sesiones_demo.find().toArray()
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Verificar que un documento reciente permanece al principio. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** La misma política TTL puede dar distintos tiempos observables según carga.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 58, ficha imprimible -->
-## Laboratorio 28 · TTL: conservar documento reciente
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-Una sesión reciente puede permanecer hasta superar la edad fijada y hasta que el monitor la procese. No interpretar su presencia inmediata como fallo. Deja pasar un intervalo y compara los identificadores; el programa no debe prometer que desaparece en un segundo determinado.
-
-### Por qué ocurre
-
-expireAfterSeconds:60 se interpreta con respecto al valor del campo Date: un documento creado hace dos minutos ya es elegible, uno creado ahora no. El monitor puede tardar en ejecutar el borrado. Si se usa expireAfterSeconds:0, el propio campo suele representar el instante de expiración. La diferencia es crucial: no mezclar el campo fechaDeCreacion con fechaDeCaducidad sin ajustar el valor. Una consulta countDocuments demuestra el estado observado, no el instante exacto del monitor.
-
-### Qué no permite concluir
-
-La misma política TTL puede dar distintos tiempos observables según carga. Una fecha dos minutos anterior con TTL de un minuto ya cumple el criterio; una fecha actual aún no, aunque ambas existan al insertar.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.sesiones_demo.find({}, {_id:0,creadoEn:1,tipo:1}).toArray()
-```
-
-Distingue elegibilidad temporal de ejecución efectiva del monitor. La misma observación repetida más tarde constituye la prueba razonable de TTL.
-
-### Ejercicio de transferencia
-
-Diseñar criterio de limpieza sin prometer caducidad instantánea.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar verificar que un documento reciente permanece al principio. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 59, ficha imprimible -->
-## Laboratorio 29 · Ocultar índice sin borrarlo
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Inspeccionar hidden:true y repetir explain de cliente.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.hideIndex("ix_cliente")
-db.ventas.getIndexes().filter(x=>x.name==="ix_cliente")
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Inspeccionar hidden:true y repetir explain de cliente. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** El índice oculto sigue ocupando espacio y coste de mantenimiento.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 60, ficha imprimible -->
-## Laboratorio 29 · Ocultar índice sin borrarlo
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-hideIndex no suprime datos del catálogo ni ahorra escrituras. Si el índice oculto era útil, el plan cambia al repetir una consulta de cliente. Deshaz el experimento con unhideIndex y vuelve a comprobar hidden para no dejar el entorno en un estado sorpresivo.
-
-### Por qué ocurre
-
-hideIndex oculta un índice al planificador sin retirarlo físicamente. Permite estudiar el efecto que tendría su ausencia y después revertir la prueba; mientras esté oculto sigue consumiendo espacio y trabajo en escrituras. dropIndex sí elimina el índice. Evita modificar _id_ y documenta la reversión. Esta herramienta es útil para retirada prudente, pero la prueba de un día no captura consultas mensuales o cierres contables.
-
-### Qué no permite concluir
-
-El índice oculto sigue ocupando espacio y coste de mantenimiento. hideIndex vuelve invisible el índice al planificador pero mantiene su actualización. Después de la prueba conviene restaurarlo con unhideIndex.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.getIndexes().filter(x=>x.hidden)
-```
-
-Esta consulta permite saber qué índice fue ocultado. Restaurarlo antes de continuar evita comparar planes de un estado desconocido.
-
-### Ejercicio de transferencia
-
-Restaurar con unhideIndex para no dejar la práctica alterada.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar inspeccionar hidden:true y repetir explain de cliente. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 61, ficha imprimible -->
-## Laboratorio 30 · Estadísticas de uso
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Observar operaciones de uso del índice desde las estadísticas disponibles.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.aggregate([{$indexStats:{}}]).toArray()
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Observar operaciones de uso del índice desde las estadísticas disponibles. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Poco uso durante laboratorio no indica inutilidad en producción.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 62, ficha imprimible -->
-## Laboratorio 30 · Estadísticas de uso
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-$indexStats depende del período y de lo que realmente se consultó. Una clave con cero accesos durante una sesión corta no es necesariamente redundante. Identifica índices usados por los scripts y redacta un calendario de revisión que incluya ciclos de negocio.
-
-### Por qué ocurre
-
-$indexStats informa de accesos observados desde un período de medición, no de la utilidad eterna del índice. Una baja cifra puede deberse a que la función que lo utiliza solo corre una vez al mes. Complementa uso, patrones de consultas, tamaños e impacto en escrituras. Para un inventario técnico, anota nombre, clave, opciones, consultas servidas y motivo de conservación. La retirada de índices debe planificarse y monitorizarse.
-
-### Qué no permite concluir
-
-Poco uso durante laboratorio no indica inutilidad en producción. $indexStats cuenta accesos desde su ventana de registro; un índice marcado poco usado durante diez minutos puede ser esencial en el cierre mensual.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.aggregate([{$indexStats:{}}]).toArray()
-```
-
-Los contadores solo describen la ventana observada; el índice de una tarea trimestral puede no tener accesos durante un curso de tres horas.
-
-### Ejercicio de transferencia
-
-Enumerar un ciclo de auditoría de índices de 30 días.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar observar operaciones de uso del índice desde las estadísticas disponibles. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 63, ficha imprimible -->
-## Laboratorio 31 · Tamaño e inventario final
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Interpretar dataSize, storageSize e indexSizes con prudencia.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.stats()
-db.ventas.getIndexes()
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Interpretar dataSize, storageSize e indexSizes con prudencia. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** Los tamaños físicos dependen de compresión, almacenamiento y volumen.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 64, ficha imprimible -->
-## Laboratorio 31 · Tamaño e inventario final
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-indexSizes mide bytes de las estructuras; no equivale a documentos adicionales ni a RAM garantizada. Relaciona el inventario con tres consultas que representa el negocio y propon qué dejarías, qué ocultarías provisionalmente y qué no construirías.
-
-### Por qué ocurre
-
-La memoria cache almacena páginas de datos e índices; cuanto más voluminosas sean las estructuras activas, mayor puede ser la presión sobre recursos. indexSizes y stats aportan tamaños físicos, pero compresión y patrones de acceso impiden inferir linealmente el rendimiento. Un índice parcial puede ser útil si su subconjunto representa una parte pequeña de datos. La pregunta no es «¿cuántos índices puedo crear?», sino «¿qué conjunto mínimo justifica cada coste?».
-
-### Qué no permite concluir
-
-Los tamaños físicos dependen de compresión, almacenamiento y volumen. stats e indexSizes permiten estudiar memoria y espacio, pero compresión y working set impiden convertir cada byte en una predicción de latencia.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.stats().indexSizes
-```
-
-El coste de bytes se pone en relación con los patrones de consulta y con el costo de mantener cada índice en escrituras.
-
-### Ejercicio de transferencia
-
-Defender qué índices conservar para tres consultas prioritarias.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar interpretar dataSize, storageSize e indexSizes con prudencia. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 65, ficha imprimible -->
-## Laboratorio 32 · Caso integrador de diagnóstico
-*Ejecución paso a paso*
-
-### Resultado profesional perseguido
-
-Redactar diagnóstico con filtro, sort, índice, nReturned, examined y mejora propuesta.
-
-### Dónde ejecutar y con qué preparación
-
-Dentro de mongosh conectado al contenedor mongo-indices, sobre curso_indices; no en PowerShell.
-
-### Paso 1 · Abrir el shell del contenedor
-
-```powershell
-docker compose exec -it mongo-indices mongosh
-```
-
-### Paso 2 · Seleccionar base y ejecutar
-
-```javascript
-use curso_indices
-db.ventas.find({clienteId:809,estado:"pagada",importe:{$gte:700}}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-### Precondición que cambia la interpretación
-
-Las operaciones de integridad y caducidad se realizan sobre colecciones sintéticas independientes para no alterar ventas.
-
-### Evidencia concreta a registrar
-
-Redactar diagnóstico con filtro, sort, índice, nReturned, examined y mejora propuesta. Registra el contador o error concreto observado, la colección y el comando utilizado. No sustituyas una evidencia ejecutada por una predicción.
-
-> **Si no obtienes el resultado:** No crear diez índices nuevos para una consulta ocasional.
-
-**Hoja para registrar salida real y conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
-
-
-<!-- Hoja didáctica 66, ficha imprimible -->
-## Laboratorio 32 · Caso integrador de diagnóstico
-*Solución comentada y ampliación*
-
-### Solución razonada
-
-El caso de cierre exige presentar consulta, plan, contadores, candidato de índice y coste añadido. Una respuesta de buena calidad explica también una limitación: el índice elegido puede beneficiar esta consulta pero perjudicar escrituras u otras ordenaciones.
-
-### Por qué ocurre
-
-La propuesta final conecta consultas frecuentes con índices mantenidos. Ejemplo: cliente → {clienteId:1}; pagadas por fecha → {estado:1,fecha:-1}; búsqueda textual → {descripcion:"text"}. Justifica por qué otras necesidades son excepcionales o se atienden de otra forma. Añadir índices sin uso aumenta superficie de mantenimiento. El alumno debe defender tanto lo que crea como lo que decide no crear; es una decisión de arquitectura de acceso a datos.
-
-### Qué no permite concluir
-
-No crear diez índices nuevos para una consulta ocasional. La solución final debe mapear cada índice conservado a uno o varios patrones frecuentes y justificar índices descartados por coste de escritura.
-
-### Contraste resuelto con un segundo escenario
-
-```javascript
-db.ventas.find({clienteId:809,estado:"pagada"}).sort({fecha:-1}).limit(10).explain("executionStats")
-```
-
-En el diagnóstico final el alumno debe conservar una tabla con dos diseños alternativos y defender uno; no basta con afirmar que la consulta ahora «va más rápida».
-
-### Ejercicio de transferencia
-
-Diseñar A/B de dos candidatos y justificar con evidencia.
-
-### Criterio de corrección de esta práctica
-
-La corrección del ejercicio exige acreditar redactar diagnóstico con filtro, sort, índice, nReturned, examined y mejora propuesta. Añade el nombre exacto de la colección, del índice o de la cuenta y explica si el resultado es una operación permitida, una denegación deliberada o una conclusión de diseño no ejecutada.
-
-**Diario de comparación / conclusión**
-
-| Qué esperaba | Qué observé | Qué puedo concluir |
-| --- | --- | --- |
-|  |  |  |
-
-
----
+Una persona afirma: «Mi consulta devuelve 50.000 ventas y examina 50.000; necesito que examine solo una». ¿Qué tiene de equivocado ese objetivo? Respuesta orientativa: la aplicación está solicitando miles de documentos completos; un índice no puede producirlos examinando un solo documento. Primero hay que analizar si la pantalla realmente necesita tantos resultados, si puede paginarlos y si el plan elegido evita candidatos innecesarios.

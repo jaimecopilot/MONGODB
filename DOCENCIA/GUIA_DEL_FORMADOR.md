@@ -1,220 +1,147 @@
-# Guía del formador: MongoDB 8.0 · Índices y seguridad
+# Guía del formador — MongoDB 8.0: indexación y seguridad
 
-**Una sesión presencial de 180 minutos.** Los cuatro manuales son material de estudio autónomo y ampliación; no deben leerse de principio a fin en clase. La sesión combina un experimento principal de indexación, cuatro índices especiales, TTL y un ensayo de autenticación y permisos. El perfil opcional TLS/X.509 puede ofrecerse como ampliación fuera de las tres horas.
+## Presentación de la formación
 
-## 1. Objetivo de aprendizaje y secuencia
+Los manuales de indexación y seguridad se han preparado para personas sin experiencia previa administrando MongoDB. Su objetivo no es memorizar comandos, sino comprender por qué existe cada mecanismo, cuándo conviene usarlo, qué ocurre al ejecutarlo y cómo verificar su funcionamiento.
 
-Al terminar, el alumno sabrá justificar por qué un índice cambia el plan de acceso; diferenciar clave simple, compuesta, multikey, text, 2dsphere y hashed; interpretar nReturned, totalKeysExamined y totalDocsExamined; aplicar unique y TTL; y demostrar que un lector autenticado no puede escribir. También comprenderá qué infraestructura requieren TLS, X.509 y LDAP y qué significa proteger datos en reposo.
+La colección de ventas, los usuarios y los certificados pertenecen a un **laboratorio ficticio**. No se utilizarán datos personales ni infraestructura de producción.
 
-| Tramo | Actividad | Referencia | Evidencia | 
-|---|---|---|---|
-| 00–15 | Historia de la venta que tarda demasiado; índice B-tree y coste de escritura | Índices teoría 01–07 | Predicción del plan sin índice |
-| 15–35 | Carga previamente preparada de ventas y línea de base sin índice | Índices prácticas 02–05 | COLLSCAN, contador de examinados |
-| 35–55 | Índice simple; comparación A/B | Índices prácticas 06–07 | IXSCAN, mismos resultados, menos trabajo |
-| 55–75 | Prefijos compuestos, sorts y estrategia ESR | Índices teoría 08–14, prácticas 10–15 | Justificación de diseño |
-| 75–100 | Multikey, text, geoespacial y hashed | Índices prácticas 18, 20, 22, 23 | Búsqueda por término y tipos de acceso |
-| 100–120 | Unique, error E11000, TTL eventual | Índices prácticas 24–28 | Error previsto y caducidad pendiente |
-| 120–135 | Capas de seguridad y SCRAM frente a autorizaciones | Seguridad teoría 01–13 | Distinción autenticación/autorización |
-| 135–160 | Tres pruebas: anónimo rechazado, lector autorizado, escritura denegada | Seguridad prácticas 03, 06, 09 | Error Unauthorized para insert |
-| 160–175 | TLS, X.509, LDAP, cifrado en reposo y ediciones | Seguridad teoría 14–24 | Tabla de capacidades y requisitos |
-| 175–180 | Síntesis / preguntas | Seguridad práctica 27 | Conclusión con evidencia y límite |
+**Ruta principal:** empezar por documentos y consultas, medir una búsqueda antes y después de un índice; estudiar un compuesto con igualdad, ordenación y rango; pasar a autenticación y roles; cerrar con la diferencia entre TLS e identidad X.509.
 
-**Advertencia:** es una secuencia intensa. Hay que tener Docker arrancado, datos cargados y la cuenta de seguridad creada **antes de empezar**. En la clase no se intenta cargar un millón de ventas en cada ordenador. Los laboratorios no incluidos arriba son ejercicios autónomos o extensiones.
+**Ruta de ampliación:** cardinalidad y selectividad, arrays y multikey, búsqueda de texto, geoespaciales, hashed, unicidad parcial, TTL, consultas cubiertas, diagnóstico de índices, roles personalizados, gestión de permisos y protección de secretos.
 
-## 2. Requisitos reales de infraestructura
+La extensión de los manuales supera una sesión corta. El objetivo no es «pasar por todas las páginas», sino que el alumnado complete la ruta principal con comprensión. Las unidades de ampliación permiten profundizar después.
 
-Se necesita un ordenador con Docker Desktop o Docker Engine + plugin Compose funcionando, 8 GB de RAM como orientación, espacio libre para imágenes y volúmenes, PowerShell en Windows o terminal Bash en macOS/Linux. MongoDB Community 8.0 y mongosh se encuentran dentro de la imagen. MongoDB Compass es opcional.
+## Cómo evaluar comprensión sin confundirla con copiar comandos
 
-El archivo `compose.yaml` configura **tres instancias independientes**, de las cuales dos intervienen en la ruta esencial: `mongo-indices` en `127.0.0.1:27017` sin autenticación (solo datos ficticios) y `mongo-seguridad` en `127.0.0.1:27018` con cuenta administrador y control de acceso. El tercer servicio `mongo-tls` escucha en `127.0.0.1:27019` y requiere generar certificados antes de arrancarlo; se utiliza únicamente en la ampliación.
+Antes de crear un índice, pregunte al alumno **qué consulta concreta quiere mejorar**. Después de crearlo, pida explicar qué plan utilizó MongoDB y cuántos documentos o claves examinó. Si el estudiante solo dice que «ahora es más rápido», pídale diferenciar tiempo medido y esfuerzo lógico.
 
-**Importante:** la instancia libre no es un modelo productivo seguro; el aislamiento a localhost reduce el alcance pero no elimina riesgos locales. No publicar estos puertos en 0.0.0.0 ni compartir datos privados. Las cuentas y contraseñas incluidas en el ejemplo son sintéticas y no deben reciclarse.
+En seguridad, solicite siempre al menos una prueba positiva y una negativa: lectura permitida a la cuenta lectora y escritura denegada. **Que una inserción falle con Unauthorized puede ser el resultado correcto** si el rol estaba definido para prohibirla.
 
-## 3. Preparación en Windows (PowerShell)
+Para valorar una práctica pida cinco evidencias:
+1. Estado inicial de datos o usuarios.
+2. Comando ejecutado, indicando si fue en PowerShell/Bash o en mongosh.
+3. Resultado esperado formulado antes de ejecutar.
+4. Resultado observado, omitiendo secretos.
+5. Explicación causal de la diferencia, si la hubiera.
 
-Descomprime el repositorio y abre PowerShell **en la raíz del repositorio**. Ejecuta:
+Un mensaje `[OK]` confirma que el programa verificó una condición; no demuestra por sí solo que el alumno la comprendió.
 
-```powershell
-Copy-Item .env.example .env
-docker version
+## Preparar el entorno con antelación
+
+Compruebe Docker Desktop o Docker Engine con Compose. El repositorio contiene `compose.yaml` y `.env.example`. Cree un archivo local `.env`, cámbiele las contraseñas de ejemplo y no lo publique. Verifique la disponibilidad de los puertos locales 27017, 27018 y 27019.
+
+Los servicios son:
+- `mongo-indices`: documentos de ventas, búsqueda y distintos tipos de índices.
+- `mongo-seguridad`: cuentas SCRAM, roles y acciones denegadas.
+- `mongo-tls`: servidor que exige TLS y permite probar X.509.
+
+El estado de las bases se almacena en **volúmenes Docker con nombre**. `docker compose stop` detiene un servicio sin borrar sus datos. `docker compose down` retira los contenedores y las redes creadas, pero conserva los volúmenes con nombre por defecto. `docker compose down --volumes` sí elimina esos volúmenes y, con ellos, cuentas y documentos ficticios. Enseñe esta diferencia antes de proponer cualquier «reinicio».
+
+### Control previo
+
+```bash
 docker compose config
-docker compose up -d
+docker compose up -d --wait mongo-indices
 docker compose ps
 ```
 
-La primera descarga de imagen puede tardar según conexión. El siguiente comando **borra y recrea solamente** `curso_indices.ventas` en la instancia local de índices. Ejecútalo antes del curso, no mientras el alumnado observa el tiempo de carga:
+Si falla el primero, revise `.env` y la sintaxis de Compose. Si falla el segundo, compruebe que Docker esté iniciado y los puertos libres. No dé por hecho que un error de contenedor es un problema de autenticación.
 
-```powershell
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/00_preflight.js
+## Ruta docente A: índices
+
+### A1. Comprender los datos
+
+Muestre una venta con `numero`, `clienteId`, `estado`, `fecha` e `importe`. Pregunte si el alumno distingue un filtro de una proyección y de una ordenación. La respuesta es necesaria antes de introducir `explain`.
+
+### A2. Encontrar una venta
+
+En PowerShell o Bash, en la raíz del repositorio:
+
+```bash
+docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
 docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
 ```
 
-En este punto NO ejecutes `03_crear_indices.js` hasta la demostración del índice simple. El resultado sin índices secundarios debe conservarse como evidencia. La carga predeterminada es de 200.000 ventas; se puede subir a 1.000.000, preferiblemente en una máquina de demostración ya preparada:
+Antes de seguir, cada estudiante debe localizar `nReturned` y `totalDocsExamined`. Pregunte por qué pueden ser tan diferentes.
 
-```powershell
-docker compose exec -T -e VENTAS=1000000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
-```
+### A3. Crear el índice y explicar el cambio
 
-Atención: al repetir la carga se eliminan los índices secundarios de `ventas`. Si ya has realizado la clase o creado índices, vuelve a ejecutar el bloque correspondiente. No borres los volúmenes del laboratorio para reiniciar solo una colección.
-
-## 4. Preparación de la cuenta de seguridad
-
-Este comando usa el administrador de demostración inicial creado por la imagen. El script prepara el documento ficticio y el lector con rol `read` en `curso_seguridad`:
-
-```powershell
-docker compose exec -T mongo-seguridad sh -lc 'mongosh --quiet -u adminlab -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --file /lab/08_configurar_seguridad.js'
-```
-
-Comprueba después la existencia de la identidad y del documento desde una sesión administradora:
-
-```powershell
-docker compose exec -T mongo-seguridad sh -lc 'mongosh --quiet -u adminlab -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --file /lab/11_verificacion_seguridad.js'
-```
-
-Y ejecuta la prueba **positiva y negativa** de permisos del alumno:
-
-```powershell
-docker compose exec -T mongo-seguridad sh -lc 'mongosh --quiet -u lectorlab -p "$LAB_READER_PASSWORD" --authenticationDatabase curso_seguridad --file /lab/09_comprobar_readonly.js'
-```
-
-En Linux o macOS sustituye únicamente `Copy-Item` por `cp .env.example .env`. Los comandos `docker compose` son iguales. En todos los casos los pasos de PowerShell/Bash están separados de los comandos internos de `mongosh`.
-
-## 5. Demostración A/B de rendimiento
-
-Primero enseña `02_antes.js` sobre el volumen recién cargado. Apunta de la salida: `nReturned`, `totalDocsExamined`, `totalKeysExamined`, etiqueta de etapa y milisegundos como dato secundario. El valor de `clienteId:4321` se encuentra en las ventas sintéticas.
-
-Ejecuta la creación de índices, luego repite:
-
-```powershell
+```bash
 docker compose exec -T mongo-indices mongosh --quiet --file /lab/03_crear_indices.js
 docker compose exec -T mongo-indices mongosh --quiet --file /lab/04_despues.js
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/05_tipos.js
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/10_verificacion_indices.js
 ```
 
-`03_crear_indices.js` crea índices sobre `clienteId`, `{estado,fecha}`, `etiquetas`, `descripcion` de tipo text, `ubicacion` de tipo 2dsphere e `idGrupo` hashed. La prueba de `04_despues.js` utiliza `hint` deliberadamente en algunos ejercicios para comparar índices existentes. No conviertas hint en recomendación general de código de producción.
+Exija comparar la misma consulta. Los milisegundos no deben presentarse como un factor universal de aceleración; utilice plan y contadores para argumentar la reducción de trabajo.
 
-No anuncies una cifra fija de aceleración: en la mayoría de equipos el escaneo examinará una proporción grande de la colección y el índice de cliente leerá pocas coincidencias, pero los tiempos exactos cambian. **El resultado observable primario es la reducción del trabajo realizado.**
+### A4. Dos índices compuestos
 
-## 6. Unique y TTL: dos comportamientos que conviene explicar
+Traduzca «ventas pagadas, superiores a 500, ordenadas por fecha» a una consulta. Señale igualdad, ordenación y rango. Muestre los índices ESR y ERS con el archivo `lab/15_compuestos_guiado.js`. No enseñe la regla ESR como si siempre se debiera aplicar sin medir.
 
-```powershell
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/06_unique_ttl.js
-```
+### A5. Ampliaciones recomendadas
 
-El script crea un índice unique sobre `cupones.codigo`, introduce una promoción e intenta repetir el mismo código. El fallo con E11000 es esperado: si el segundo documento entrara, habría un problema. Después crea una colección `sesiones` con índice TTL de `expireAfterSeconds:0` sobre fechas de expiración. Una sesión ya vencida es elegible; otra vence a los quince segundos; otra al cabo de una hora.
+En función del ritmo de clase: `$elemMatch` sobre arrays, texto, índices 2dsphere, hashed, unicidad parcial y TTL. Una ampliación se considera útil cuando el estudiante puede explicar qué problema resuelve y qué problema no resuelve.
 
-No hace falta detener la clase un minuto. Continúa con seguridad y vuelve a consultar cuando haya transcurrido tiempo:
+## Ruta docente B: seguridad
 
-```powershell
-docker compose exec -T mongo-indices mongosh --quiet --file /lab/07_ver_ttl.js
-```
+### B1. Autenticación versus autorización
 
-El monitor TTL actúa en segundo plano; no garantiza supresión exacta al llegar el reloj a cero. Para explicar el matiz, diferencia *fecha elegible para eliminación* de *eliminación ya ejecutada*.
+Plantee dos preguntas independientes: «¿quién eres?» y «¿qué puedes hacer?». En la base `curso_seguridad` el administrador prepara un documento ficticio y dos cuentas: `lectorlab` con rol `read` y `escritorlab` con rol `readWrite`.
 
-## 7. Las tres pruebas de seguridad que deben verse en directo
+### B2. Cuatro pruebas imprescindibles
 
-### Prueba 1: anónimo sin permisos
+El alumno debe observar:
+1. Una lectura sin autenticar, rechazada.
+2. Una lectura como `lectorlab`, permitida.
+3. Una inserción como `lectorlab`, rechazada.
+4. Una inserción como `escritorlab`, permitida.
 
-```powershell
-docker compose exec -T mongo-seguridad mongosh --quiet --eval 'db.getSiblingDB("curso_seguridad").secretos.findOne()'
-```
+Pregunte por qué la tercera prueba demuestra una configuración correcta. Si el grupo responde «porque el usuario es incorrecto», aclare que la cuenta sí está autenticada, pero la operación supera sus privilegios.
 
-El proceso puede abrir una conexión, pero leer la colección protegida debe ser rechazado. Lo que importa es el error de autorización en la operación, no si se mostró el banner de `mongosh`.
+### B3. TLS no concede permisos
 
-### Prueba 2: lector autenticado
+Con certificados de laboratorio generados mediante `scripts/generar-certificados.sh`, `mongo-tls` debe rechazar una conexión sin TLS y aceptar una conexión TLS que verifique la CA. Un `ping` positivo no demuestra lectura de datos protegidos.
 
-```powershell
-docker compose exec -T mongo-seguridad sh -lc 'mongosh --quiet -u lectorlab -p "$LAB_READER_PASSWORD" --authenticationDatabase curso_seguridad --eval "db.getSiblingDB("curso_seguridad").secretos.findOne()"'
-```
+### B4. X.509
 
-Ahora la consulta debe devolver el documento sintético. Este éxito permite interpretar la siguiente denegación como **autorización**, no como caída de servidor.
+Explique la diferencia entre el certificado de servidor y el de cliente. La identidad del certificado de alumno se registra en `$external`, con un rol de lectura. Debe leer un documento y recibir un rechazo al escribir.
 
-### Prueba 3: el mismo lector intenta escribir
+### B5. Temas conceptuales
 
-```powershell
-docker compose exec -T mongo-seguridad sh -lc 'mongosh --quiet -u lectorlab -p "$LAB_READER_PASSWORD" --authenticationDatabase curso_seguridad --file /lab/09_comprobar_readonly.js'
-```
+LDAP, cifrado nativo en reposo, gestión empresarial de claves, recuperación y auditoría avanzada deben explicarse como decisiones de arquitectura y producto. No afirme que el contenedor Community ejecuta funciones que no están disponibles en su edición.
 
-El script intenta una inserción y espera código 13 / `Unauthorized`; si se concedieron permisos de más, lanza una excepción. En el examen final, pedir al alumno que explique por qué `Authentication failed` y `Unauthorized` no significan lo mismo.
+## Resolver fallos sin añadir nuevos
 
-## 8. Actividad opcional de TLS y autenticación X.509 real
+Pida al alumno que identifique antes de repetir cualquier comando:
+- qué pretendía conseguir;
+- qué servidor y base estaba utilizando;
+- si escribía en la terminal del host o dentro de mongosh;
+- qué esperaba ver;
+- qué mensaje obtuvo;
+- qué condición concreta podría investigar.
 
-**Esta demostración está verificada en GitHub Actions con MongoDB Community 8.0.** No es necesario usar Enterprise para la autenticación X.509 de clientes. La ampliación requiere Bash (Git Bash o WSL en Windows), OpenSSL y Docker; no forma parte del itinerario imprescindible de 180 minutos.
+Ejemplos:
 
-Preparación en un directorio recién clonado del repositorio (sin certificados anteriores):
+**El script dice que ya hay índices:** la primera medición necesita datos sin índices secundarios; recargue únicamente la colección ficticia y explique que la recarga destruye esos índices.
 
-```bash
-cp .env.example .env             # en PowerShell: Copy-Item .env.example .env
-# Editar .env para asignar contraseñas exclusivamente docentes.
-bash scripts/generar-certificados.sh
-docker compose up -d --wait mongo-seguridad mongo-tls
-```
+**Unauthorized al insertar como lector:** no dé permisos de administrador. Compruebe primero que la lectura funciona y explique la denegación esperada.
 
-Para ejecutar **la prueba integral, incluida la creación del usuario $external**, Bash debe disponer de las contraseñas de `.env` como variables de entorno:
+**Fallo TLS:** compruebe el certificado, la CA, el nombre de host y la fecha. No desactive validación de certificados para conseguir una demostración engañosamente satisfactoria.
 
-```bash
-set -a
-. ./.env
-set +a
-bash scripts/probar-seguridad.sh
-```
+**Una consulta devuelve cero resultados:** verifique datos, colección y filtro antes de atribuirlo al índice.
 
-El script comprueba, en orden, que SCRAM rechaza la conexión anónima y las contraseñas erróneas; que `read` autoriza la lectura y niega la escritura; que TLS rechaza el canal sin cifrar; y que un certificado X.509 con un usuario en `$external` puede leer, pero no insertar. **La comparación se considera probada solo si el script termina con `[OK] BANCO DE SEGURIDAD COMPLETO`.**
+## Preguntas de evaluación y respuestas
 
-Para inspeccionar las partes públicas de los certificados (nunca publiques los `.key` ni los `.pem` que incluyen clave privada):
+**1. ¿Una búsqueda que devuelve un documento, pero examina 200.000, está necesariamente mal?** No. Puede ser correcta respecto a su resultado, pero costosa respecto al trabajo. La decisión de optimizar depende de consulta, volumen y frecuencia.
 
-```bash
-openssl x509 -in certs/server.crt -noout -subject -issuer -dates -ext subjectAltName
-openssl x509 -in certs/client.crt -noout -subject -issuer -dates
-```
+**2. ¿Por qué no crear índices para cada campo?** Por su consumo de espacio y mantenimiento; una aplicación también inserta, modifica y elimina documentos.
 
-La secuencia se reproduce también desde [GitHub Actions](https://github.com/jaimecopilot/MONGODB/actions), sin instalación local de MongoDB. No se utilizan certificados empresariales ni secretos permanentes.
+**3. ¿Por qué puede necesitar SORT un índice ERS?** Porque ordenar primero por un rango de importe puede no conservar el orden global de fechas solicitado entre distintos importes.
 
-## 9. LDAP, cifrado en reposo y límites de la demo
+**4. ¿Qué demuestra una escritura denegada a un lector autenticado?** Que se está aplicando la autorización sobre esa acción, siempre que la identidad y el contexto estén bien comprobados.
 
-**LDAP:** MongoDB Enterprise puede integrarse con directorios; a partir de 8.0 la autenticación/autorización LDAP está obsoleta y se anuncia su retirada futura. La actividad consiste en dibujar cliente → MongoDB → directorio → grupo → rol y discutir alternativas. La instalación de LDAP no se ha realizado ni se considera una demostración en Community.
+**5. ¿Por qué `ping` con TLS no demuestra permisos de datos?** Porque responde a una comprobación de conectividad y canal, no a una autorización sobre una colección.
 
-**Cifrado en reposo:** el motor WiredTiger cifrado autogestionado es una capacidad Enterprise. El volumen de Docker sin medidas adicionales no demuestra esta protección. Separar cifrado del disco/almacenamiento, cifrado nativo del motor y cifrado del lado cliente; asociar cada uno a custodio de claves, amenaza y recuperación.
+## Cierre
 
-**TLS:** un canal cifrado protege tránsito, pero no concede permisos por sí mismo ni cifra todos los ficheros. **X.509:** el certificado de cliente debe vincular su sujeto a un usuario con roles en `$external`. **SCRAM:** autentica pero no equivale a TLS.
-
-## 10. Diagnóstico rápido de errores de aula
-
-| Síntoma | Pregunta correcta | Medida concreta |
-|---|---|---|
-| `docker: command not found` | ¿Docker instalado? | Instalar e iniciar Docker Desktop |
-| `Cannot connect to Docker daemon` | ¿Está arrancado Engine? | Abrir Docker Desktop y esperar inicialización |
-| `port is already allocated` | ¿Existe MongoDB local u otro contenedor? | Inspeccionar puerto y ajustar mapeo de host, no el puerto interno |
-| `Authentication failed` | ¿Cuenta, clave y authSource? | Contrastar `adminlab@admin` frente a `lectorlab@curso_seguridad` |
-| `Unauthorized` | ¿Identidad válida sin privilegios? | Probar antes una lectura permitida |
-| El lector no existe | ¿Se ejecutó script 08? | Preparar demo con cuenta root, revisar volumen |
-| `COLLSCAN` después de crear índices | ¿Filtro y nombre de índice? | Ver `getIndexes()` y repetir el mismo predicado |
-| `IndexNotFound` | ¿Se ejecutó el script de índices? | Crear clave concreta; no cambiar diez cosas a la vez |
-| TTL no borra inmediatamente | ¿Es BSON Date? ¿Ya es elegible? | Comprobar timestamp y esperar monitor |
-| Certificado no válido | ¿CA, SAN, expiración, subject? | Regenerar certificados de laboratorio y registrar identidad exacta |
-
-## 11. Criterios de evaluación
-
-La evaluación comprueba la *explicación causal*, no la cantidad de comandos copiados. Pide dos evidencias de índices (antes y después de una consulta), una explicación de prefijos compuestos, una captura interpretada de $text o TTL y una comparación de seguridad con permiso permitido y denegado. Una respuesta completa nombra índice o usuario, escenario inicial, resultado real, hipótesis que queda confirmada y limitación. No se puntúa como realizada una prueba de LDAP ni de cifrado Enterprise que solamente se ha explicado.
-
-## 12. Parada, limpieza y siguiente sesión
-
-Para detener contenedores sin destruir los datos persistidos:
-
-```powershell
-docker compose down
-```
-
-**No uses `docker compose down -v`** salvo decisión explícita de destruir todos los volúmenes sintéticos del laboratorio. Para la siguiente clase, evita resetear la colección de ventas si quieres conservar las comparaciones o ejecuta la carga en el orden previsto.
-
-## 13. Documentación oficial
-
-- [Tipos de índices v8.0](https://www.mongodb.com/docs/v8.0/core/indexes/index-types/)
-- [Índices compuestos y prefijos](https://www.mongodb.com/docs/v8.0/core/indexes/index-types/index-compound/)
-- [Resultados de explain](https://www.mongodb.com/docs/manual/reference/explain-results/)
-- [Índices TTL](https://www.mongodb.com/docs/manual/core/index-ttl/)
-- [TLS v8.0](https://www.mongodb.com/docs/v8.0/tutorial/configure-ssl/)
-- [Clientes X.509](https://www.mongodb.com/docs/manual/tutorial/configure-x509-client-authentication/)
-- [LDAP v8.0 — obsoleto](https://www.mongodb.com/docs/v8.0/core/security-ldap-external/)
-- [Cifrado en reposo](https://www.mongodb.com/docs/manual/core/security-encryption-at-rest/)
+El alumnado debe poder resolver un caso nuevo, no solo repetir el caso visto: formular una consulta, elegir un índice candidato, medir su plan, asignar un rol mínimo y comprobar al menos una operación que deba ser denegada. La formación se completa cuando puede justificar las decisiones con observaciones y comprender los límites de lo verificado.

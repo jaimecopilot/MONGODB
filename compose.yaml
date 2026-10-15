@@ -3,7 +3,7 @@ services:
     image: mongo:8.0
     command: ["mongod","--bind_ip_all","--setParameter","ttlMonitorSleepSecs=1"]
     ports: ["127.0.0.1:27017:27017"]
-    volumes: ["./lab:/lab:ro"]
+    volumes: ["mongo_indices_data:/data/db","./lab:/lab:ro"]
     healthcheck:
       test: ["CMD","mongosh","--quiet","--eval","db.adminCommand({ping:1}).ok"]
       interval: 5s
@@ -18,7 +18,7 @@ services:
       LAB_READER_PASSWORD: ${LAB_READER_PASSWORD:-lector-solo-lab}
       LAB_WRITER_PASSWORD: ${LAB_WRITER_PASSWORD:-escritor-solo-lab}
     ports: ["127.0.0.1:27018:27017"]
-    volumes: ["./lab:/lab:ro"]
+    volumes: ["mongo_seguridad_data:/data/db","./lab:/lab:ro"]
     healthcheck:
       test: ["CMD-SHELL","mongosh --quiet -u adminlab -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' >/dev/null"]
       interval: 5s
@@ -30,10 +30,15 @@ services:
     image: mongo:8.0
     command: ["mongod","--bind_ip_all","--auth","--tlsMode","requireTLS","--tlsCertificateKeyFile","/certs/server.pem","--tlsCAFile","/certs/ca.crt","--tlsAllowConnectionsWithoutCertificates"]
     ports: ["127.0.0.1:27019:27017"]
-    volumes: ["./lab:/lab:ro","./certs:/certs:ro"]
+    volumes: ["mongo_tls_data:/data/db","./lab:/lab:ro","./certs:/certs:ro"]
     healthcheck:
       test: ["CMD","mongosh","--quiet","--host","localhost","--tls","--tlsCAFile","/certs/ca.crt","--eval","db.adminCommand({ping:1}).ok"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 10s
+
+volumes:
+  mongo_indices_data:
+  mongo_seguridad_data:
+  mongo_tls_data:
