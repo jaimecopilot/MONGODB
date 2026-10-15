@@ -31,7 +31,7 @@ for (let start = 0; start < n; start += itemsPerBatch) {
       etiquetas:["venta",i%3===0?"web":"tienda",i%11===0?"urgente":"normal"],
       idGrupo:i%10000,
       ubicacion:{type:"Point",coordinates:[-3.70+((i*7)%101)/10000,40.42+((i*11)%101)/10000]},
-      clienteId:i%10000, clienteHash:i,
+      clienteId:(i*37)%20000, clienteHash:i,
       fecha:new Date(Date.UTC(2025,0,1+(i%365))), importe:(i%10000)/10 + 0.95,
       tags: i%2===0 ? ["online","promocion"] : ["tienda","entrega"],
       descripcion: i%97===0 ? "reclamacion urgente del cliente" : i%8===0 ? "cafe premium en grano" : i%8===1 ? "bicicleta urbana plegable" : "compra habitual",
