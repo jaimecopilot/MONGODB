@@ -25,11 +25,16 @@ for (let start = 0; start < n; start += itemsPerBatch) {
   const end = Math.min(n,start+itemsPerBatch);
   for (let i=start;i<end;i++) {
     documents.push({
-      _id:i+1, idVenta:i+1, tienda:shops[i%4], categoria:categories[Math.floor(i/4)%4],
+      _id:i+1, idVenta:i+1, numero:i+1, tienda:shops[i%4], categoria:categories[Math.floor(i/4)%4],
+      estado:["pagada","pendiente","enviada","cancelada"][i%4],
+      region:["centro","norte","sur","este","oeste"][i%5],
+      etiquetas:["venta",i%3===0?"web":"tienda",i%11===0?"urgente":"normal"],
+      idGrupo:i%10000,
+      ubicacion:{type:"Point",coordinates:[-3.70+((i*7)%101)/10000,40.42+((i*11)%101)/10000]},
       clienteId:i%10000, clienteHash:i,
       fecha:new Date(Date.UTC(2025,0,1+(i%365))), importe:(i%10000)/10 + 0.95,
       tags: i%2===0 ? ["online","promocion"] : ["tienda","entrega"],
-      descripcion: i%97===0 ? "reclamacion urgente del cliente" : "compra habitual",
+      descripcion: i%97===0 ? "reclamacion urgente del cliente" : i%8===0 ? "cafe premium en grano" : i%8===1 ? "bicicleta urbana plegable" : "compra habitual",
       productos:[{sku:"SKU"+(i%100),cantidad:(i%3)+1}]
     });
   }
