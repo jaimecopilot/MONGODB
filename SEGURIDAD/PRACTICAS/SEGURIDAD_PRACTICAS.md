@@ -1331,3 +1331,223 @@ Entrega el informe a otra persona y pídele responder:
 - qué controles quedaron sin probar.
 
 Si no puede responder, mejora la trazabilidad de tus afirmaciones. El propósito de esta última práctica es aprender a **justificar conclusiones**, no acumular documentos burocráticos.
+
+
+---
+
+# Laboratorio 14 — Interpretar certificados TLS sin confundir servidor y cliente
+
+## Una misma tecnología, funciones diferentes
+
+Cuando utilizamos TLS en MongoDB aparecen varios archivos que pueden parecer similares: certificados, claves privadas, autoridades certificadoras y paquetes PEM. Un principiante puede llegar a conectar copiando comandos sin saber qué fichero está entregando.
+
+Esta práctica se centra en **comprender qué contiene cada archivo y qué identidad representa**. No necesitas implementar algoritmos criptográficos.
+
+### Paso 1. Preparar certificados nuevos para un entorno desechable
+
+Desde Bash en la raíz del repositorio:
+
+```bash
+bash scripts/generar-certificados.sh
+```
+
+El script utiliza OpenSSL para crear una CA y certificados de servidor y de cliente **temporales, exclusivamente docentes**. Si ya tienes certificados que estás utilizando en una sesión activa, no los sustituyas sin comprender que el servidor puede necesitar reiniciarse con el nuevo material.
+
+La carpeta `certs` queda fuera del repositorio Git por contener claves privadas.
+
+### Paso 2. Identificar los archivos
+
+Localiza:
+
+| Archivo | Función |
+|---|---|
+| `ca.crt` | Certificado público de la autoridad de prueba |
+| `server.crt` | Certificado del servidor |
+| `server.key` | Clave privada correspondiente al servidor |
+| `server.pem` | Paquete utilizado por el servidor en el laboratorio |
+| `client.crt` | Certificado de la identidad del alumno |
+| `client.key` | Clave privada del alumno |
+| `client.pem` | Paquete usado para autenticación de cliente |
+
+No publiques archivos `.key` ni paquetes PEM que incorporen esas claves. El hecho de que una práctica sea efímera no convierte una clave privada en material inocuo.
+
+### Paso 3. Leer un certificado sin mostrar la clave
+
+En Bash:
+
+```bash
+openssl x509 -in certs/server.crt -noout -subject -issuer -dates
+```
+
+Interpreta `subject` como la identidad a la que se emitió el certificado, `issuer` como la autoridad que lo firmó y las fechas como el intervalo de validez.
+
+Este comando **no imprime la clave privada**. Es suficiente para investigar esos metadatos.
+
+### Paso 4. Leer el certificado del alumno
+
+```bash
+openssl x509 -in certs/client.crt -noout -subject -issuer -dates
+```
+
+Compara con el certificado del servidor. Deben representar identidades distintas: uno corresponde al servicio MongoDB; otro a un cliente que podrá utilizar X.509.
+
+En el laboratorio el sujeto del alumno contiene un DN con `CN=alumno-x509`. Un DN no es una contraseña. Es una descripción de la identidad del certificado que el servidor puede asociar a un usuario y sus roles.
+
+### Paso 5. Verificar firmas de la CA
+
+```bash
+openssl verify -CAfile certs/ca.crt certs/server.crt certs/client.crt
+```
+
+**Resultado esperado:** confirmación de verificación correcta de ambos certificados con esa CA de laboratorio.
+
+¿Qué hemos comprobado? La validez criptográfica de las firmas respecto a la autoridad indicada, bajo las condiciones que verifica OpenSSL. **No hemos demostrado todavía que la cuenta del alumno pueda leer o escribir datos**.
+
+### Paso 6. Comprobar el nombre del servidor
+
+El certificado del servidor incluye nombres que se esperan para el entorno de prueba. Puedes inspeccionar su información ampliada:
+
+```bash
+openssl x509 -in certs/server.crt -noout -text
+```
+
+Busca la extensión `Subject Alternative Name`. Debe contener nombres o direcciones para las que se preparó la conexión, como `localhost` o el nombre del servicio según el archivo de generación.
+
+La verificación del nombre del servidor es esencial para evitar aceptar un certificado válido para **otro** equipo.
+
+### Paso 7. Probar sin TLS y con TLS
+
+Con la instancia `mongo-tls` preparada mediante Compose:
+
+```bash
+docker compose up -d --wait mongo-tls
+```
+
+Primero intenta un ping sin TLS:
+
+```bash
+docker compose exec -T mongo-tls mongosh --quiet --host localhost --eval 'db.adminCommand({ping:1})'
+```
+
+Debe fallar: el servidor exige TLS.
+
+Ahora utiliza la CA:
+
+```bash
+docker compose exec -T mongo-tls mongosh --quiet --host localhost --tls --tlsCAFile /certs/ca.crt --eval 'printjson(db.adminCommand({ping:1}))'
+```
+
+**Resultado esperado:** `ok:1`.
+
+### Paso 8. Explicar qué NO sabemos todavía
+
+Una conexión TLS con `ping` correcto no demuestra que el cliente esté autorizado a leer `curso_cert`. Tampoco demuestra que se haya autenticado por X.509, porque todavía no hemos presentado el certificado de alumno con ese mecanismo.
+
+La práctica siguiente puede utilizar el script `scripts/probar-seguridad.sh` para preparar esa identidad, asignarle un rol de solo lectura y probar acceso permitido y escritura rechazada.
+
+### Preguntas de comprensión
+
+1. ¿Por qué el certificado de la CA no debe confundirse con la clave privada del servidor?
+2. ¿Qué significa que el certificado tenga una fecha de caducidad?
+3. ¿Qué protege TLS y qué no protege?
+4. ¿Por qué `ping` no es una prueba completa de privilegios?
+5. ¿Qué diferencia existe entre certificar al servidor y autenticar al cliente?
+
+---
+
+# Laboratorio 15 — Aprender a reinicializar un entorno de prueba sin destruir datos por accidente
+
+## El problema más peligroso de un tutorial mal explicado
+
+Un alumno modifica una contraseña, vuelve a ejecutar un script de creación de usuarios y recibe «usuario ya existe». Al buscar una solución encuentra una respuesta que recomienda ejecutar `docker compose down --volumes`. Tras hacerlo, desaparecen sus cuentas y documentos.
+
+¿Por qué ocurrió? Porque la orden elimina los **volúmenes de datos**, no solamente el contenedor en ejecución.
+
+Este laboratorio explica la persistencia y propone un procedimiento de diagnóstico antes de borrar algo.
+
+### Paso 1. Reconocer tres operaciones de Docker Compose
+
+| Orden | Qué hace de forma resumida | ¿Elimina datos de volúmenes con nombre? |
+|---|---|---|
+| `docker compose stop` | Detiene los servicios seleccionados | No |
+| `docker compose down` | Retira contenedores y redes del proyecto | No, normalmente conserva volúmenes con nombre |
+| `docker compose down --volumes` | Retira también volúmenes del proyecto | Sí |
+
+No confundas «parar el servidor» con «recrear su almacenamiento desde cero».
+
+### Paso 2. Comprobar el inventario de contenedores
+
+```bash
+docker compose ps
+```
+
+La instancia `mongo-seguridad` debe aparecer en ejecución para seguir con el experimento. No necesitas copiar contraseñas a la salida.
+
+### Paso 3. Comprobar un documento de control
+
+Conecta como administrador desde la terminal:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+Dentro de `mongosh`:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+Guarda únicamente el resultado esperado (presente/ausente) y un identificador de control. No uses datos reales.
+
+### Paso 4. Detener sin destruir
+
+Sal del shell y ejecuta en la terminal:
+
+```bash
+docker compose stop mongo-seguridad
+```
+
+El contenedor se detiene, pero los datos siguen en su volumen con nombre.
+
+### Paso 5. Reanudar y comprobar
+
+```bash
+docker compose up -d --wait mongo-seguridad
+```
+
+Vuelve a autenticarte y consulta `demo-1`. **Resultado esperado:** sigue existiendo.
+
+**Explicación:** detener el proceso no destruye automáticamente la información almacenada en el volumen persistente.
+
+### Paso 6. ¿Por qué no repetimos sin pensar la creación de usuarios?
+
+Si `lectorlab` ya existe, intentar `createUser` otra vez con ese mismo nombre puede producir un error de duplicidad de usuario. No se trata de un fallo de red.
+
+Un procedimiento adecuado comienza comprobando su existencia desde una identidad autorizada:
+
+```javascript
+db.getSiblingDB("curso_seguridad").getUser("lectorlab")
+```
+
+Si existe, decide si realmente necesitas modificar esa cuenta, actualizar su contraseña o conservar su estado. No borres todo el almacenamiento para corregir un problema localizado.
+
+### Paso 7. Restauración y copia no son lo mismo que reinicialización
+
+El laboratorio permite reconstruir datos ficticios, pero eso no equivale a restaurar una copia de seguridad de producción. Una restauración exige identificar el conjunto recuperado, verificar coherencia y comprobar que las aplicaciones vuelven a funcionar.
+
+**Pregunta profesional:** si una empresa pierde una colección real, ¿sería aceptable ejecutar el script de carga de ventas ficticias y declarar que los datos se han recuperado? No: estaríamos creando otros documentos, no restaurando los originales.
+
+### Paso 8. Plan de reinicio responsable
+
+Antes de ejecutar una operación destructiva:
+1. Identifica qué colección o cuenta quieres corregir.
+2. Comprueba qué servicio y volumen están implicados.
+3. Decide si hay datos que debas conservar.
+4. Utiliza la operación menos destructiva que resuelva la necesidad.
+5. Anota cómo comprobarás que el resultado es correcto.
+
+**No ejecutaremos `down --volumes` como parte obligatoria de esta práctica.** La finalidad es comprender las consecuencias sin destruir los datos que ya creaste.
+
+### Autoevaluación
+
+¿Por qué un volumen persistente es útil para un alumno que detiene el ordenador al terminar la clase? ¿Por qué la misma persistencia obliga a distinguir «cambié una variable de entorno» de «cambié el usuario almacenado en MongoDB»? ¿Qué evidencia exigirías antes de afirmar que se restauró una base de datos?
