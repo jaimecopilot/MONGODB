@@ -42,7 +42,7 @@ docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
 Preparar las cuentas de seguridad, con contraseña introducida mediante prompt:
 
 ```bash
-docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password --file /lab/08_configurar_seguridad.js
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --file /lab/08_configurar_seguridad.js --password
 ```
 
 Comprueba que `lectorlab` puede leer y que su escritura es rechazada usando las actividades del cuaderno. Si no funciona con usuarios y contraseñas del fichero `.env`, no inicies la sesión sin haberlo corregido.
