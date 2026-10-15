@@ -128,6 +128,8 @@ jobs:
         run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/15_compuestos_guiado.js
       - name: Verificar indice unico parcial y cambios de estado
         run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/17_partial_unique_guiado.js
+      - name: Verificar ejercicios adicionales de los manuales
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/18_validar_practicas_adicionales.js
       - name: Comprobar ejemplos complementarios de los manuales
         run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/22_pruebas_de_practicas.js
       - name: Diagnosticar errores
