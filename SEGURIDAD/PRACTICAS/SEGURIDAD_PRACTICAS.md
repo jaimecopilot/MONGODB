@@ -1551,3 +1551,193 @@ Antes de ejecutar una operación destructiva:
 ### Autoevaluación
 
 ¿Por qué un volumen persistente es útil para un alumno que detiene el ordenador al terminar la clase? ¿Por qué la misma persistencia obliga a distinguir «cambié una variable de entorno» de «cambié el usuario almacenado en MongoDB»? ¿Qué evidencia exigirías antes de afirmar que se restauró una base de datos?
+
+
+---
+
+# Laboratorio 16 — Ejecutar el banco completo de seguridad y entender cada resultado
+
+## La diferencia entre «el script terminó» y «he aprendido qué demuestra»
+
+En algunas clases se ejecuta un archivo de comprobación que imprime una lista de mensajes verdes. El alumno considera que ha aprendido seguridad porque no apareció ningún error. Eso es insuficiente: podría no saber qué control se probó ni qué debe significar una denegación.
+
+En este laboratorio utilizaremos el procedimiento automático `scripts/probar-seguridad.sh`, pero prepararemos antes una **tabla de hipótesis**, interpretaremos los mensajes y comprobaremos las limitaciones de la prueba.
+
+### Paso 1. Reconocer las tres instancias
+
+El proyecto contiene:
+- `mongo-indices`, usado para consultas e índices de ventas;
+- `mongo-seguridad`, con cuentas SCRAM y roles;
+- `mongo-tls`, que exige TLS y permite autenticación X.509.
+
+El banco de seguridad utiliza principalmente las dos últimas. No debes ejecutar los experimentos sobre un MongoDB real que hayas encontrado en el ordenador.
+
+### Paso 2. Preparar un entorno desechable
+
+Revisa primero si esos contenedores ya contienen datos que quieras conservar. El banco realiza operaciones de preparación de usuarios y colecciones; ciertos pasos están pensados para una instancia recién inicializada.
+
+**No ejecutes la prueba completa sobre un volumen con usuarios ya creados** sin entender qué comandos intentarán crearlos otra vez. Para repetirla desde cero, el formador puede utilizar un entorno Docker dedicado y desechable, como hace GitHub Actions en cada job.
+
+### Paso 3. Preparar credenciales de prueba
+
+En el archivo local `.env` configura `MONGO_ADMIN_PASSWORD`, `LAB_READER_PASSWORD` y `LAB_WRITER_PASSWORD` con valores exclusivamente docentes. Los valores no deben ser credenciales de producción.
+
+Para el script Bash, las variables deben estar disponibles en el entorno del proceso. Si utilizas Bash y controlas el contenido de `.env` puedes revisar sus líneas y cargarlo cuidadosamente; el formador debe explicar que ejecutar un archivo mediante `source` solo es seguro si confiamos en su contenido.
+
+No publiques el resultado de comandos que muestren contraseñas.
+
+### Paso 4. Generar certificados temporales
+
+```bash
+bash scripts/generar-certificados.sh
+```
+
+Este archivo genera la CA local, el certificado de servidor y el certificado del alumno. Los certificados no se reutilizarán para otros proyectos; tienen una vigencia reducida y están diseñados para el laboratorio.
+
+### Paso 5. Iniciar los dos servicios
+
+```bash
+docker compose up -d --wait mongo-seguridad mongo-tls
+docker compose ps
+```
+
+Ambos deben estar preparados. Si alguno falla, revisa los logs del servicio correspondiente. No conviertas un fallo de certificado al arrancar el servidor en un supuesto error de contraseña del usuario lector.
+
+### Paso 6. Escribir los resultados esperados ANTES de probar
+
+Completa la segunda columna:
+
+| Prueba | ¿Permitida o denegada? | Razón |
+|---|---|---|
+| Leer sin autenticar | ______ | ______ |
+| Leer con contraseña SCRAM incorrecta | ______ | ______ |
+| Leer con `lectorlab` | ______ | ______ |
+| Insertar con `lectorlab` | ______ | ______ |
+| Insertar con `escritorlab` | ______ | ______ |
+| Conectar a `mongo-tls` sin TLS | ______ | ______ |
+| Conectar con TLS y CA válida | ______ | ______ |
+| Leer como alumno X.509 autorizado | ______ | ______ |
+| Escribir como alumno X.509 de solo lectura | ______ | ______ |
+
+Si no puedes anticipar cada respuesta, vuelve a la teoría. Ejecutar primero y copiar después el resultado esperado elimina el valor didáctico del experimento.
+
+### Paso 7. Ejecutar el procedimiento de verificación
+
+Con las variables locales disponibles y los certificados generados:
+
+```bash
+bash scripts/probar-seguridad.sh
+```
+
+El script prepara el entorno y comprueba tanto operaciones permitidas como errores esperados. Si el resultado incluye una denegación prevista, no significa que el banco haya fallado. Los mensajes `[OK]` indican que el resultado coincide con la hipótesis declarada en el propio script.
+
+### Paso 8. Identificar un error por conexión no preparada
+
+Si falla antes de crear o autenticar usuarios, revisa:
+- si `mongo-seguridad` se inició con el archivo `.env` correcto;
+- si existe una cuenta administrativa inicial creada con otra contraseña;
+- si los certificados de la instancia TLS están presentes y accesibles;
+- si el contenedor es realmente nuevo cuando el script espera crear `admincert`.
+
+**No resuelvas todos los problemas borrando volúmenes inmediatamente.** Primero identifica qué recurso se vería afectado y qué datos perderías.
+
+### Paso 9. Interpretar los resultados de identidad
+
+Si se rechaza una contraseña errónea, MongoDB está negando autenticación. Si `lectorlab` logra leer y después se rechaza su inserción, es RBAC el que impide una operación no autorizada.
+
+Estas dos denegaciones se parecen superficialmente en que ambas producen errores, pero pertenecen a capas distintas.
+
+### Paso 10. Interpretar TLS y X.509
+
+La conexión sin TLS debe ser rechazada por el servicio `mongo-tls`. La conexión que verifica la CA permite comprobar el canal. Después, la identidad X.509 puede autenticar al cliente mediante su certificado, y el rol asignado determina qué puede consultar.
+
+Una escritura rechazada **después de autenticarse por X.509** no significa que el certificado sea incorrecto. Puede significar exactamente lo contrario: la identidad fue aceptada, pero sus permisos no incluyen insertar.
+
+### Paso 11. Redactar la conclusión
+
+No entregues la salida completa sin comentario. Resume:
+1. Qué mecanismos fueron puestos a prueba.
+2. Qué operaciones positivas funcionaron.
+3. Qué operaciones negativas fueron rechazadas.
+4. Qué resultado muestra la distinción entre autenticación y autorización.
+5. Qué aspectos NO demuestra este banco comunitario.
+
+### Solución orientativa
+
+«En el servidor protegido se rechazó la lectura anónima y una contraseña incorrecta. Una cuenta de lectura pudo consultar el documento preparado, pero no insertarlo. La cuenta de escritura sí pudo realizar su operación autorizada. La instancia TLS rechazó una conexión sin cifrado y permitió otra que verificó su CA. El certificado de cliente X.509 identificó una cuenta con permiso de lectura, no de escritura. Estas pruebas no acreditan el cifrado nativo en reposo ni una integración LDAP empresarial».
+
+Esa conclusión tiene un alcance concreto, porque cada frase corresponde a una operación observada.
+
+---
+
+# Laboratorio 17 — Diseñar una respuesta a un acceso indebido sin borrar las evidencias
+
+## El caso
+
+En los registros de una aplicación aparece un intento de lectura de datos desde una cuenta que no debería consultar esa colección. Una persona propone solucionar el problema borrando inmediatamente todos los documentos, cambiando indiscriminadamente roles y reiniciando la infraestructura.
+
+Es importante aprender que **un incidente requiere investigar su causa y contener sus efectos**, no destruir todo lo que ayuda a comprender qué ocurrió.
+
+Esta actividad es un ejercicio de análisis y diseño. No vamos a simular un ataque real ni a manipular un servidor fuera del laboratorio.
+
+### Paso 1. Reunir hechos antes de concluir
+
+Imagina estos datos:
+- La instancia `mongo-seguridad` responde.
+- La cuenta `lectorlab` puede leer `curso_seguridad.secretos`.
+- Una cuenta distinta intenta la misma consulta y recibe `Unauthorized`.
+- No tenemos todavía evidencia de que se hayan extraído datos.
+
+¿Qué podemos afirmar? Que el servidor denegó la operación concreta observada. **No podemos afirmar** que no existiera ningún otro intento o que el sistema entero sea invulnerable.
+
+### Paso 2. Separar hechos y sospechas
+
+| Afirmación | ¿Hecho o inferencia? |
+|---|---|
+| La operación concreta recibió una denegación | Hecho observado |
+| Nadie accedió nunca a otra colección | No demostrado |
+| La cuenta carece de permisos para esta operación | Compatible con la evidencia; hay que revisar roles |
+| Todas las copias de seguridad están protegidas | No demostrado |
+
+El objetivo no es dramatizar el incidente, sino aprender a escribir un diagnóstico que otra persona pueda verificar.
+
+### Paso 3. Identificar qué se debe preservar
+
+Un informe técnico debe conservar, según el procedimiento de la organización:
+- instante de la observación;
+- identidad o servicio implicado;
+- operación solicitada;
+- colección y base;
+- resultado de la operación;
+- configuración relevante de permisos, sin publicar secretos;
+- registros necesarios para investigar.
+
+**No modifiques o elimines indiscriminadamente los logs** para obtener una pantalla limpia. Esa acción podría eliminar pistas relevantes.
+
+### Paso 4. Priorizar controles
+
+Si el problema es un acceso desde una red no autorizada, revisa exposición de puertos y reglas de red. Si alguien usa una cuenta con exceso de permisos, revisa RBAC y la gestión de credenciales. Si la comunicación carece de TLS, la solución está en el canal y la verificación de certificados.
+
+Diferentes causas requieren diferentes controles. No otorgues privilegios adicionales para «arreglar» un rechazo correctamente producido.
+
+### Paso 5. Proponer dos pruebas posteriores
+
+Después de cualquier corrección, debes comprobar:
+- **prueba positiva:** la operación legítima sigue funcionando;
+- **prueba negativa:** la operación que debía impedirse sigue siendo rechazada.
+
+Ejemplo: después de reducir permisos, `lectorlab` debe continuar leyendo `demo-1`, pero no debe poder insertarlo ni eliminarlo.
+
+### Paso 6. Explicar los límites
+
+Una prueba con datos ficticios puede enseñar a investigar errores de permisos, pero no sustituye procedimientos de respuesta a incidentes, obligaciones legales, retención forense ni evaluación de sistemas empresariales.
+
+### Preguntas finales
+
+1. ¿Por qué un error `Unauthorized` puede ser evidencia favorable?
+2. ¿Por qué no es correcto afirmar que nunca hubo otro acceso?
+3. ¿Qué diferencia hay entre contener un problema de red y revocar una identidad?
+4. ¿Por qué hay que volver a probar tanto una operación permitida como una denegada?
+5. ¿Qué riesgos introduces si eliminas todos los registros antes de investigar?
+
+**Resultado esperado:** una respuesta razonada, no una secuencia de comandos destructivos.
