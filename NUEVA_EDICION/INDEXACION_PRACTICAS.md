@@ -1579,6 +1579,383 @@ Para cada consulta, registra el resultado, el índice seleccionado, los document
 
 ---
 
+## 33. Reiniciar una práctica sin destruir otras colecciones
+
+Después de varios experimentos, la colección de ventas contiene índices simples, compuestos, especiales e incluso alguno oculto. Si quieres repetir la comparación inicial, no basta con escribir otra vez `explain()`: **tu línea de base ha cambiado**.
+
+### Diagnóstico antes de tocar nada
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_indices
+db.ventas.countDocuments({})
+db.ventas.getIndexes()
+```
+
+Anota cuántos documentos tienes y cuántos índices existen. Comprueba también si creaste otras colecciones de demostración, como `unicidad_demo` o `sesiones_demo`.
+
+### Reinicio controlado
+
+Sal a la terminal y ejecuta:
+
+```bash
+docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/01_cargar_ventas.js
+```
+
+Este script **elimina y recrea únicamente** `curso_indices.ventas`. Los índices secundarios asociados a esa colección dejan de existir. Otras colecciones de demostración no son necesariamente eliminadas por esa orden.
+
+### Verificación de la nueva línea de base
+
+```bash
+docker compose exec -T mongo-indices mongosh --quiet --file /lab/02_antes.js
+```
+
+Esperamos una comparación inicial sin índice sobre `numero`. Después puedes crear los índices y repetirla.
+
+### Por qué esta disciplina importa
+
+Una prueba cuyo estado inicial no conoces puede producir resultados imposibles de interpretar. Si en la primera medición ya existe un índice adecuado, el «antes» no representa una consulta sin índice. **Reproducibilidad** significa poder reconstruir condiciones conocidas y demostrar que el cambio observado corresponde al experimento.
+
+---
+
+## 34. Crear tu propia colección pequeña para entender qué mide explain
+
+A veces doscientos mil documentos abruman. Vamos a construir una colección muy pequeña y comprender todo lo que contiene antes de indexarla.
+
+### Datos controlados
+
+```javascript
+use curso_indices
+db.miniventas_demo.drop()
+db.miniventas_demo.insertMany([
+  {numero: 1, ciudad: "Madrid", importe: 10},
+  {numero: 2, ciudad: "Madrid", importe: 20},
+  {numero: 3, ciudad: "Sevilla", importe: 30},
+  {numero: 4, ciudad: "Bilbao", importe: 40}
+])
+```
+
+### Buscar una venta
+
+```javascript
+db.miniventas_demo.find({numero: 4})
+  .explain("executionStats")
+```
+
+El servidor podría recorrer los cuatro documentos; examina `totalDocsExamined`. Aunque aparezca `COLLSCAN`, es perfectamente razonable sobre un conjunto tan pequeño.
+
+### Crear un índice y comparar
+
+```javascript
+db.miniventas_demo.createIndex({numero: 1})
+db.miniventas_demo.find({numero: 4})
+  .hint({numero: 1})
+  .explain("executionStats")
+```
+
+Usamos `hint` para observar controladamente el índice, porque sobre cuatro documentos el planificador podría preferir el escaneo.
+
+### Interpretación
+
+Comprueba que `nReturned` sigue siendo 1. La estructura de acceso puede cambiar, pero la pregunta de negocio y el documento esperado no han cambiado.
+
+**Qué demuestra:** la diferencia entre datos guardados, resultados devueltos y trabajo examinado. **Qué no demuestra:** que el índice haya supuesto una mejora temporal estadísticamente significativa.
+
+---
+
+## 35. Igualdad múltiple: $in no es un filtro por rango
+
+Una aplicación puede buscar ventas de varios estados, no uno solo. Para evitar construir consultas enormes, MongoDB admite `$in`.
+
+### Consulta simple
+
+```javascript
+db.ventas.find({
+  estado: {$in: ["pagada", "enviada"]}
+}).limit(5)
+```
+
+El filtro significa «estado es alguno de estos valores». No establece ningún orden ni intervalo de estados.
+
+### Comparar con dos consultas por separado
+
+```javascript
+db.ventas.countDocuments({estado: "pagada"})
+db.ventas.countDocuments({estado: "enviada"})
+db.ventas.countDocuments({
+  estado: {$in: ["pagada", "enviada"]}
+})
+```
+
+Si cada venta tiene un único estado, el último recuento debería corresponder a la suma de ambos grupos, salvo que el conjunto haya cambiado durante la prueba.
+
+### ¿Qué tiene que ver esto con los índices?
+
+Un índice sobre `estado` puede dar acceso a los valores seleccionados, pero recuerda que se trata de un campo con pocas categorías: cada valor puede representar muchas ventas. Ejecuta `explain("executionStats")` y razona si el número de documentos examinados es pequeño o grande respecto al total.
+
+### Error de interpretación
+
+`$in` no significa «está entre dos límites». Para rangos numéricos o temporales se utilizan operadores como `$gte` y `$lt`, siempre con tipos de datos coherentes.
+
+---
+
+## 36. El mismo valor escrito como número o texto
+
+Un error muy común entre principiantes consiste en copiar desde una pantalla un número que está representado como texto. La consulta puede devolver cero resultados y se culpa injustamente al índice.
+
+### Prueba con un campo numérico
+
+```javascript
+use curso_indices
+db.ventas.find({numero: 199998}).limit(1)
+```
+
+Si cargaste 200.000 documentos debe aparecer una venta. Ahora prueba:
+
+```javascript
+db.ventas.find({numero: "199998"}).limit(1)
+```
+
+Es posible que no devuelva resultados. La cadena `"199998"` y el número `199998` no deben considerarse el mismo tipo.
+
+### Verificar el tipo guardado
+
+```javascript
+const documentoNumero = db.ventas.findOne({numero: 199998});
+printjson(documentoNumero)
+```
+
+El valor de `numero` aparece sin comillas en la representación de tipo numérico.
+
+### Qué harías en una aplicación real
+
+El programa que recibe una entrada de usuario debe validar y convertir el dato antes de construir el filtro. Crear otro índice no soluciona una consulta que compara tipos equivocados.
+
+### Pregunta de diagnóstico
+
+Si una consulta devuelve cero documentos examinando solo una clave de índice, ¿significa que el índice está roto? No necesariamente. Podría haber usado correctamente el índice y no encontrar coincidencias debido al valor solicitado.
+
+---
+
+## 37. Prefijos de índices compuestos: probar tres formas de consulta
+
+Tenemos un índice compuesto por `clienteId` y `fecha`. Queremos aprender qué ocurre cuando usamos los dos campos, solo el primero o solo el segundo.
+
+### Preparar el índice
+
+```javascript
+db.ventas.createIndex(
+  {clienteId: 1, fecha: -1},
+  {name: "ix_cliente_fecha"}
+)
+```
+
+### Primera pregunta: cliente y orden por fecha
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("executionStats")
+```
+
+### Segunda: solo cliente
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .limit(5)
+  .explain("executionStats")
+```
+
+### Tercera: solo fecha
+
+```javascript
+db.ventas.find({
+  fecha: {$gte: ISODate("2025-07-01")}
+}).limit(5).explain("executionStats")
+```
+
+Para cada una anota qué índice escogió el motor y cuánto trabajo examinó. No obligues las tres a utilizar el mismo plan mediante `hint`; aquí queremos observar la decisión natural.
+
+### Interpretar
+
+Las claves de un índice compuesto están ordenadas primero por su **prefijo**. Por eso un filtro por cliente puede beneficiarse de una estructura que comienza por ese campo. Un filtro solo por fecha no obtiene automáticamente el mismo acceso selectivo.
+
+---
+
+## 38. Buscar una palabra inexistente: distinguir ausencia de datos y fallo técnico
+
+Una consulta textual puede funcionar perfectamente y devolver cero resultados. Es esencial aprender esa diferencia.
+
+### Buscar un término que sabemos que existe
+
+```javascript
+db.ventas.find({
+  $text: {$search: "reclamacion"}
+}).limit(3)
+```
+
+### Buscar un término deliberadamente extraño
+
+```javascript
+db.ventas.find({
+  $text: {$search: "palabrainexistenteabcdef"}
+}).limit(3)
+```
+
+Si el índice de texto existe, la segunda consulta debería devolver cero documentos sin que eso implique un error del servidor.
+
+### Comparar los resultados
+
+**Cero coincidencias** significa que el sistema no encontró documentos que cumplan la expresión; **error del operador `$text`** puede significar que falta el índice de texto requerido o que la consulta está mal formada.
+
+### Diagnóstico
+
+Si la primera consulta tampoco devuelve documentos, inspecciona la colección y `getIndexes()`. El índice clásico usa reglas de idioma y normalización, de modo que no debemos asumir que cualquier secuencia de caracteres se tokeniza de la misma manera.
+
+---
+
+## 39. Dos índices que compiten por una misma consulta
+
+Para una consulta por cliente y fecha pueden existir índices con distinta distribución de campos. Vamos a estudiar el concepto de «candidato».
+
+### Preparar dos candidatos
+
+```javascript
+db.ventas.createIndex({clienteId: 1}, {name: "ix_cliente"})
+db.ventas.createIndex(
+  {clienteId: 1, fecha: -1},
+  {name: "ix_cliente_fecha"}
+)
+```
+
+### Comparar con hint
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(5)
+  .hint("ix_cliente")
+  .explain("executionStats")
+```
+
+Repite con `hint("ix_cliente_fecha")`. Mantén el resto de la consulta idéntico.
+
+### Qué observar
+
+Busca diferencias en el plan de ordenación y en los contadores. Si el índice simple no aporta el orden, el servidor puede necesitar una etapa adicional. El compuesto combina el prefijo de igualdad con la secuencia de fecha.
+
+### Lo que no concluirás
+
+Que una medición tarde un milisegundo menos no demuestra que sea universalmente mejor. Explica primero el mecanismo: filtro, ordenación y acceso. Los tiempos de un entorno pequeño pueden variar.
+
+---
+
+## 40. Limpiar una colección de demostración sin tocar ventas
+
+En ejercicios anteriores creaste `miniventas_demo`, `facturas_demo`, `caducidad_demo` y otras colecciones con datos exclusivamente ficticios.
+
+### Inventario antes de borrar
+
+```javascript
+use curso_indices
+db.getCollectionNames()
+```
+
+Localiza cuáles contienen el sufijo `_demo`. **No ejecutes un borrado masivo automático basado en nombres si no comprendes sus efectos**: limita el ejercicio a una colección concreta creada por ti.
+
+### Eliminar solo una colección conocida
+
+```javascript
+db.miniventas_demo.drop()
+```
+
+### Verificar
+
+```javascript
+db.getCollectionNames()
+db.ventas.countDocuments({})
+```
+
+La colección `miniventas_demo` debe desaparecer, mientras `ventas` debe seguir existiendo.
+
+### Qué has aprendido
+
+En un laboratorio, el estado inicial y final deben ser conocidos. Una limpieza prudente conserva el conjunto principal y elimina solo datos controlados. Esa disciplina es tan importante como conocer `createIndex` porque permite repetir ejercicios sin perder información por accidente.
+
+---
+
+## 41. Un caso completo con colección pequeña y resultados previsibles
+
+Vamos a diseñar desde cero una consulta para cinco documentos inventados. No dependeremos de los 200.000 registros del generador.
+
+### Carga de pedidos
+
+```javascript
+use curso_indices
+db.pedidos_caso.drop()
+db.pedidos_caso.insertMany([
+ {numero: 1, cliente: "Ana", fecha: ISODate("2025-01-01"), importe: 15},
+ {numero: 2, cliente: "Luis", fecha: ISODate("2025-01-02"), importe: 20},
+ {numero: 3, cliente: "Ana", fecha: ISODate("2025-01-03"), importe: 30},
+ {numero: 4, cliente: "Ana", fecha: ISODate("2025-01-04"), importe: 50},
+ {numero: 5, cliente: "Luis", fecha: ISODate("2025-01-05"), importe: 90}
+])
+```
+
+### Pregunta
+
+¿Cuáles son las dos compras más recientes de Ana?
+
+```javascript
+db.pedidos_caso.find({cliente: "Ana"})
+  .sort({fecha: -1})
+  .limit(2)
+```
+
+Debes obtener las ventas 4 y 3, en ese orden.
+
+### Índice candidato
+
+```javascript
+db.pedidos_caso.createIndex({cliente: 1, fecha: -1})
+```
+
+Ejecuta `explain("executionStats")` y observa las claves. Por ser una colección minúscula, es posible que el planificador no elija el índice como primer plan sin `hint`; eso no contradice el aprendizaje.
+
+### Transferencia
+
+¿Cómo cambiaría la pregunta para conocer **todas** las compras de Luis? El filtro utilizaría `cliente:"Luis"` y el límite podría desaparecer. ¿Cómo cambiaría para ordenar compras por importe sin filtrar por cliente? La estructura propuesta tendría que revisarse.
+
+---
+
+## 42. Diagnóstico final con seis situaciones
+
+Resuelve cada situación indicando **qué comprobarías primero**, no qué comando copiarías sin más.
+
+**Caso 1.** `db.ventas.countDocuments({})` devuelve cero. Antes de medir índices, comprueba base, servicio y carga de datos.
+
+**Caso 2.** El script `02_antes.js` rechaza continuar porque existen índices secundarios. No alteres el resultado esperado: reinicia el conjunto mediante el generador y repite desde una línea de base limpia.
+
+**Caso 3.** `getIndexes()` muestra `ix_numero`, pero la consulta filtra por `clienteId`. Tener índice sobre número no responde necesariamente la consulta por cliente.
+
+**Caso 4.** Una consulta con `limit(5)` examina muchos documentos. El límite restringe los resultados solicitados; el plan puede necesitar trabajo previo para encontrarlos o ordenarlos.
+
+**Caso 5.** El segundo documento con un correo duplicado recibe `E11000`. Si el índice es `unique`, el rechazo es la evidencia correcta de integridad.
+
+**Caso 6.** Un documento expirado continúa visible durante un instante. TTL funciona con un monitor asíncrono, por lo que debes revisar fecha, índice y tiempo de observación antes de declarar un problema.
+
+### Producto final del alumno
+
+Elige dos casos y escribe cuatro líneas: contexto, hipótesis, prueba y explicación. El profesor debe poder reconocer tu razonamiento sin tener acceso a tu ordenador.
+
+### Criterio de éxito
+
+No depende del número de capturas que hayas reunido. Depende de que sepas relacionar **consulta, datos, índice, plan y evidencia**. Ese razonamiento es el objetivo profesional de toda la práctica de indexación.
+
+---
+
 ## Resolución de incidencias frecuentes
 
 **«docker: command not found».** No estás ejecutando Docker desde una terminal que tenga disponible el programa; revisa instalación y ruta.
