@@ -471,6 +471,286 @@ Esa explicación, acompañada de una ejecución real, vale mucho más que recita
 
 ---
 
+## 13. Índices parciales: indexar solo lo que interesa
+
+Una colección puede contener millones de ventas históricas, pero el equipo de atención solo consulta a menudo las que están pendientes de tramitar. ¿Debemos mantener un índice especializado sobre todas las ventas de hace diez años para resolver las consultas sobre pedidos pendientes?
+
+Un **índice parcial** permite incluir únicamente los documentos que satisfacen una condición. Un ejemplo simplificado:
+
+```javascript
+db.ventas.createIndex(
+  {fecha: -1},
+  {
+    name: "ix_pendientes_fecha",
+    partialFilterExpression: {estado: "pendiente"}
+  }
+)
+```
+
+El índice contiene claves de fecha solo para ventas cuyo estado sea `"pendiente"`. Su atractivo principal no es una promesa absoluta de velocidad, sino reducir el número de entradas que deben mantenerse para un determinado patrón de uso.
+
+### Una consulta que podría aprovecharlo
+
+```javascript
+db.ventas.find({estado: "pendiente"})
+  .sort({fecha: -1})
+  .limit(10)
+```
+
+La consulta comunica explícitamente la condición del índice parcial. El planificador puede considerarlo al saber que ese subconjunto es suficiente para producir resultados correctos.
+
+### Una consulta que NO debe perder datos
+
+```javascript
+db.ventas.find({})
+  .sort({fecha: -1})
+  .limit(10)
+```
+
+Esta segunda pregunta significa «las diez ventas más recientes sin importar el estado». El índice parcial anterior **no representa todos los estados**, de modo que usarlo como única fuente podría omitir documentos. MongoDB no debe seleccionar un índice parcial si eso ocasiona un resultado incompleto.
+
+Esta distinción enseña una regla de enorme importancia: un índice solo es útil si **contiene la información que la consulta necesita**.
+
+### Diferencia con un índice sparse
+
+Un índice disperso o *sparse* puede excluir documentos que no contienen un campo. Un índice parcial es más expresivo: puede incluir documentos según condiciones, incluso sobre campos distintos de la clave indexada. No son sinónimos, aunque algunos comportamientos se solapan.
+
+### Pregunta de razonamiento
+
+Si el estado de una venta cambia de `"pendiente"` a `"pagada"`, ¿qué sucede con la entrada correspondiente en un índice parcial que solo incluye pendientes? El motor debe actualizar el índice para reflejar la nueva condición. Por eso el índice sigue teniendo un coste de mantenimiento.
+
+---
+
+## 14. Un índice no es una orden: el planificador puede escoger otro
+
+A veces creamos el índice que creemos perfecto, ejecutamos la consulta y descubrimos que MongoDB ha utilizado otro distinto. Es frustrante si esperábamos que `createIndex` obligara al motor a escogerlo.
+
+Pero **crear un índice no equivale a imponer su uso**. MongoDB dispone de un planificador que considera alternativas según la forma de la consulta y las estructuras disponibles.
+
+### El laboratorio mental de dos índices
+
+Imagina que existen:
+
+```javascript
+{clienteId: 1}
+{clienteId: 1, fecha: -1}
+```
+
+La consulta:
+
+```javascript
+db.ventas.find({clienteId: 901}).sort({fecha: -1}).limit(5)
+```
+
+puede obtener mejores condiciones con el índice compuesto, porque atiende filtro y ordenación. En otra consulta por cliente que necesita todos los documentos sin orden, el índice simple también puede resultar interesante.
+
+### Qué hace hint()
+
+`hint()` permite señalar un índice específico para una prueba o una decisión explícita:
+
+```javascript
+db.ventas.find({clienteId: 901})
+  .hint({clienteId: 1})
+  .explain("executionStats")
+```
+
+El valor de `hint` puede ser un patrón de claves o el nombre exacto de un índice. Si se indica uno inexistente, puede aparecer un error. Y si el índice existe pero no es apropiado, el rendimiento puede empeorar.
+
+Lo usamos para **comparar hipótesis**, no como remedio automático a que el servidor no elija nuestra opción.
+
+### Una enseñanza que evita malos hábitos
+
+No hay una regla «más índices = más rendimiento». Añadir índices similares puede elevar el trabajo en escrituras sin ofrecer mejoras relevantes. En algunos casos conviene eliminar redundancias, siempre tras estudiar las consultas que el índice atendía.
+
+---
+
+## 15. Cuando el tipo del campo cambia, cambia la consulta
+
+MongoDB permite almacenar distintos tipos de valores: números, cadenas de texto, fechas, objetos, listas. Eso aporta flexibilidad, pero obliga a prestar atención a cómo se escriben consultas y cómo se construyen los índices.
+
+### Dos valores que se parecen pero no significan lo mismo
+
+```javascript
+{numero: 12345}
+{numero: "12345"}
+```
+
+El primero es un número; el segundo es texto. Aunque la pantalla muestre los mismos dígitos, las comparaciones y el orden de los valores **no deben suponerse equivalentes**.
+
+Por ejemplo, una condición por rango sobre números tiene sentido aritmético:
+
+```javascript
+db.ventas.find({importe: {$gte: 100, $lt: 200}})
+```
+
+Si `importe` se guardara como texto en algunos documentos, un principiante podría sorprenderse con los resultados o con una distribución distinta de los tipos.
+
+### El ejemplo clásico de una fecha
+
+Una fecha guardada como `ISODate("2025-07-01")` admite filtros temporales naturales. Una fecha almacenada como texto requiere razonar sobre el formato y no debe tratarse ingenuamente como fecha real.
+
+Para saber qué has almacenado, inspecciona un documento y sus valores. No comiences a «optimizar» índices cuando el problema básico es que los datos tienen tipos inesperados.
+
+### Qué debe hacer el desarrollador
+
+Definir un esquema de datos comprensible, mantener tipos coherentes, validar las entradas de la aplicación y probar las consultas sobre datos representativos. El índice no corrige por sí mismo los errores de modelado.
+
+---
+
+## 16. Índices y ordenaciones: el coste oculto de TOP N
+
+Una página de administración muestra las diez ventas más recientes. La consulta puede parecer sencilla:
+
+```javascript
+db.ventas.find({tienda: "Madrid"})
+  .sort({fecha: -1})
+  .limit(10)
+```
+
+Pero `limit(10)` por sí solo no garantiza que el motor lea únicamente diez documentos. Primero necesita localizar qué documentos cumplen el filtro **y** cuáles son los más recientes.
+
+### Dos situaciones distintas
+
+**Sin ordenación útil en un índice:** el servidor quizá deba identificar candidatos y ordenar, antes de decidir los diez primeros. Según el plan y el volumen, eso puede implicar más trabajo del que sugiere `limit`.
+
+**Con un índice compuesto compatible:** si las claves están organizadas por tienda y, dentro de cada tienda, por fecha descendente, el motor puede recorrer las primeras entradas necesarias sin realizar una ordenación separada.
+
+```javascript
+db.ventas.createIndex({tienda: 1, fecha: -1})
+```
+
+### Por qué no es lo mismo un filtro y un sort
+
+El filtro decide **qué registros cumplen** una condición. La ordenación decide **en qué secuencia aparecen**. Son requisitos distintos, y el índice debe considerarlos juntos.
+
+### Pregunta técnica de transferencia
+
+Una aplicación muestra las diez ventas más recientes de *cualquier* tienda. ¿Basta el índice `{tienda:1,fecha:-1}` para optimizar del mismo modo la ordenación global por fecha? No está garantizado: las claves están agrupadas primero por tienda. El prefijo de igualdad que permitía aprovechar la fecha ha desaparecido.
+
+---
+
+## 17. Cómo observar el tamaño y el uso de los índices
+
+Un índice puede ser muy útil para una lectura y, al mismo tiempo, consumir una cantidad apreciable de almacenamiento y memoria. La decisión de mantenerlo no termina cuando la consulta funciona.
+
+### Inventario inicial
+
+```javascript
+db.ventas.getIndexes()
+```
+
+Esta orden permite enumerar nombres, claves y ciertas opciones. Si aparecen diez índices sobre la misma colección, eso no constituye por sí solo un problema: necesitamos entender qué consultas atiende cada uno.
+
+### Tamaño de las estructuras
+
+Las estadísticas de una colección pueden proporcionar información sobre almacenamiento e índices. Dependiendo de la versión y de los permisos de la cuenta, se pueden consultar campos relacionados con `indexSizes` y `totalIndexSize` en `stats()`.
+
+```javascript
+db.ventas.stats()
+```
+
+No confundas el espacio de los documentos con el espacio de los índices. Tampoco supongas que el tamaño informado es idéntico en cualquier servidor: hay compresión, diferencias de almacenamiento y otros factores.
+
+### Estadísticas de acceso
+
+MongoDB permite consultar estadísticas de acceso a índices mediante `$indexStats`:
+
+```javascript
+db.ventas.aggregate([{$indexStats: {}}])
+```
+
+Estos contadores se interpretan en el contexto del servidor y su periodo de observación. Un índice con cero accesos durante una sesión de clase no es necesariamente inútil: quizá atienda una tarea de fin de mes que todavía no se ejecutó.
+
+### Una conclusión responsable
+
+Para valorar un índice hay que combinar **beneficio medido**, **coste de almacenamiento**, **coste de actualización** y **frecuencia del patrón de consulta**. Ninguna cifra aislada sustituye a ese análisis.
+
+---
+
+## 18. Ocultar un índice para estudiar el efecto de retirarlo
+
+Supongamos que sospechamos que un índice antiguo ya no se utiliza. Eliminarlo directamente obliga a reconstruirlo si después descubrimos que seguía siendo importante.
+
+MongoDB permite **ocultar un índice** al planificador de consultas. Esto significa que las consultas no pueden seleccionarlo para sus planes mientras permanezca oculto.
+
+Ejemplo en una colección de laboratorio:
+
+```javascript
+db.ventas.hideIndex("ix_cliente_fecha")
+```
+
+A continuación repetimos las consultas por cliente y observamos los planes. Si la situación empeora, podemos volver a hacerlo visible:
+
+```javascript
+db.ventas.unhideIndex("ix_cliente_fecha")
+```
+
+### ¿Desaparece el índice de disco?
+
+No. Ocultarlo **no lo elimina**, y no deja de consumir automáticamente recursos de mantenimiento o almacenamiento. Si el índice es único, la restricción de unicidad se mantiene; si es TTL, sigue pudiendo caducar documentos.
+
+### Limitaciones
+
+No se puede ocultar el índice obligatorio `_id`. Tampoco podemos forzar mediante `hint` un índice oculto. La práctica debe comprobar siempre cuál está oculto antes de hacer pruebas y restaurarlo al terminar.
+
+### Por qué es más seguro que borrar por ensayo
+
+Es una herramienta de diagnóstico reversible. Enseña a trabajar con hipótesis: «Creo que este índice ya no es necesario». La hipótesis se contrasta observando cambios reales en los planes y en la carga representativa, no eliminando estructuras irreversiblemente.
+
+---
+
+## 19. El coste de construir índices sobre muchos documentos
+
+Crear un índice no es solo escribir una línea y obtener una mejora inmediata en todas las aplicaciones. Para construirlo, MongoDB debe procesar los documentos existentes y preparar la estructura.
+
+### Colección pequeña frente a colección grande
+
+Sobre diez documentos, el trabajo de construir un índice es diminuto. Sobre millones, consume CPU, entrada/salida de datos, memoria y espacio. Los mecanismos internos y la disponibilidad de escrituras dependen de la versión y de la configuración del despliegue; no simplificaremos el proceso diciendo que «todo se bloquea» o que «no afecta en nada».
+
+### No ejecutar cambios indiscriminados en producción
+
+Crear y borrar índices en una base de datos utilizada por clientes puede alterar el uso de recursos y los planes de consulta. En una organización real se evalúan ventanas, carga, supervisión y posibilidades de reversión.
+
+### Caso de aprendizaje
+
+Imagina que creas veinte índices en un sistema que recibe mil ventas por segundo. Cada venta nueva no solo añade un documento: también obliga a mantener las entradas de los índices afectados. Esa carga puede convertirse en un problema aunque las búsquedas individuales resulten rápidas.
+
+### El criterio correcto
+
+Un índice debe justificar su existencia por consultas de negocio o restricciones de integridad, no por estar disponible como opción. El número adecuado de índices depende de los patrones de lectura y escritura, no de una cifra universal.
+
+---
+
+## 20. Diseñar índices cuando cambia la manera de buscar
+
+Antes de terminar, vamos a resolver un pequeño caso completo sin ejecutar ningún comando:
+
+La librería consulta durante el día:
+
+- una venta por número;
+- las últimas diez ventas de un cliente;
+- las últimas veinte ventas pagadas de una tienda;
+- documentos cuya descripción contiene la palabra «reclamación».
+
+Un diseño inicial razonable podría estudiar:
+
+1. `{numero:1}` con unicidad si el número no se puede repetir;
+2. `{clienteId:1,fecha:-1}`;
+3. una combinación de `tienda`, `estado` y `fecha` según selectividad y ordenación;
+4. un índice `text` sobre `descripcion`.
+
+### Qué pasaría si la aplicación cambia
+
+Se añade ahora una pantalla que filtra únicamente por `fecha`, sin cliente, tienda ni estado. Ninguno de los índices compuestos anteriores garantiza resolver esa nueva pregunta óptimamente: su primer campo puede impedir un acceso selectivo directo por fecha.
+
+Por tanto, el diseño no es una lista permanente. Debe revisarse al cambiar las consultas. Esa es la razón de mantener un inventario de operaciones reales y no solo un catálogo de campos.
+
+### Ejercicio oral
+
+Elige una de las cuatro preguntas y explica por qué tu índice propuesto tiene sentido; identifica otra pregunta para la que probablemente no sería igual de útil. Haber entendido eso significa que ya estás razonando como diseñador y no como alguien que copia comandos.
+
+---
+
 ## Glosario mínimo
 
 **Base de datos:** agrupación lógica de colecciones. **Colección:** conjunto de documentos. **Documento:** registro estructurado, con campos y valores. **Índice:** estructura auxiliar mantenida para determinadas operaciones. **Clave:** valor o conjunto de valores indexados. **Plan:** estrategia elegida para resolver una consulta. **COLLSCAN:** recorrido de colección. **IXSCAN:** recorrido de entradas de índice. **FETCH:** lectura de documentos. **Selectividad:** proporción de documentos que cumplen el filtro. **Cardinalidad:** cantidad de valores distintos. **TTL:** política de caducidad de documentos mediante índice de fechas.
