@@ -1095,3 +1095,239 @@ Debe aparecer el texto actualizado. El rol `readWrite` permite escritura sobre e
 Anota los mensajes reales y explica por qué dos cuentas autenticadas pueden recibir respuestas distintas al ejecutar la misma operación.
 
 **Conclusión correcta:** los roles, no el simple hecho de introducir una contraseña válida, limitan qué acciones puede realizar cada identidad.
+
+
+---
+
+# Laboratorio 11 — Diagnosticar un fallo de autenticación sin modificar privilegios
+
+## La situación
+
+Un empleado asegura que está utilizando el nombre de usuario y la contraseña correctos, pero MongoDB no le permite entrar. En muchos equipos, la primera reacción sería cambiarle los permisos o darle una cuenta administrativa para terminar el trabajo. Eso sería un error de diagnóstico.
+
+Vamos a estudiar **la base de autenticación** y el mecanismo por el que MongoDB encuentra la identidad.
+
+### Paso 1. Confirmar que el servidor existe
+
+En la terminal del ordenador:
+
+```bash
+docker compose ps
+```
+
+Si `mongo-seguridad` está detenido:
+
+```bash
+docker compose up -d --wait mongo-seguridad
+```
+
+No tiene sentido investigar contraseñas si no está en marcha el servidor al que deseas conectarte.
+
+### Paso 2. Elegir una cuenta conocida
+
+Usa `lectorlab`, creado en `curso_seguridad` en la primera práctica. Necesitas conocer su contraseña **de laboratorio**, guardada en tu configuración personal, sin escribirla en el documento de entrega.
+
+### Paso 3. Probar una base de autenticación errónea
+
+Desde PowerShell o Bash:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase admin --password
+```
+
+Introduce la contraseña que crees correcta.
+
+**Resultado esperado:** error de autenticación. En este laboratorio la identidad `lectorlab` está registrada en `curso_seguridad` y no en `admin`.
+
+El comando no significa «solicita los datos de admin»: indica **dónde debe buscar el servidor la cuenta que presentamos**.
+
+### Paso 4. Corregir el contexto, no los permisos
+
+Repite la conexión con la base correcta:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase curso_seguridad --password
+```
+
+Debes poder entrar. Ahora, dentro de `mongosh`:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.findOne({_id:"demo-1"})
+```
+
+Debe aparecer el documento de lectura. **Observa:** hemos resuelto la autenticación sin añadir ningún permiso de escritura.
+
+### Paso 5. Provocar después una denegación real de permiso
+
+En la misma sesión del lector, intenta:
+
+```javascript
+db.getSiblingDB("curso_seguridad").secretos.insertOne({_id:"diagnostico-no-permitido"})
+```
+
+Ahora el resultado esperado es **denegación de autorización**. Hemos llegado al servidor, autenticado la cuenta y recibido rechazo únicamente para una operación que supera sus privilegios.
+
+### Paso 6. Comparar los tres estados
+
+| Situación | ¿Existe conexión al servidor? | ¿Identidad autenticada? | ¿Operación permitida? |
+|---|---|---|---|
+| Contenedor no arrancado | No | No | No se evalúa |
+| Base de autenticación equivocada | Sí | No | No se evalúa |
+| Lector intenta escribir | Sí | Sí | No |
+
+Esta tabla muestra por qué no se deben resolver todos los fallos dando el rol `root`.
+
+### Paso 7. Explicación escrita
+
+Redacta una respuesta para soporte técnico:
+
+> «La conexión con el servidor se había establecido, pero la cuenta se estaba buscando en una base de autenticación distinta de aquella donde fue creada. Corrigiendo ese parámetro, pudo consultar los datos; las escrituras continúan denegadas por diseño».
+
+Si puedes explicar esta distinción sin copiar el texto, has comprendido tres capas fundamentales de la seguridad.
+
+---
+
+# Laboratorio 12 — Caducidad de sesiones: TTL no sustituye la decisión de acceso
+
+## Qué problema plantea
+
+Una aplicación guarda un documento para cada sesión temporal. Cuando una sesión caduca, no debe aceptarse como válida. MongoDB puede usar un índice TTL para borrar el registro eventualmente, pero la limpieza **no es inmediata** y no debe convertirse en la única regla de autorización.
+
+### Paso 1. Preparar dos sesiones ficticias
+
+Conéctate como `adminlab` a `mongo-seguridad` y abre `mongosh`. Dentro del shell:
+
+```javascript
+const d = db.getSiblingDB("curso_seguridad");
+d.sesiones_clase.drop();
+d.sesiones_clase.insertMany([
+  {_id:"caducada",usuario:"alumno1",expiraEn:new Date(Date.now()-60000)},
+  {_id:"vigente",usuario:"alumno2",expiraEn:new Date(Date.now()+3600000)}
+]);
+```
+
+La primera fecha representa un minuto antes del momento actual; la segunda, una hora después. Son datos completamente ficticios. El `drop` elimina exclusivamente la colección `sesiones_clase`.
+
+### Paso 2. Comprobar la expiración al consultar
+
+```javascript
+d.sesiones_clase.find({
+  _id:"caducada",
+  expiraEn:{$gt:new Date()}
+}).toArray()
+```
+
+**Resultado esperado:** array vacío. Aunque el registro todavía exista, su fecha de validez ya ha pasado. Por tanto, una condición temporal adecuada no lo considera vigente.
+
+### Paso 3. Comprobar la sesión futura
+
+```javascript
+d.sesiones_clase.find({
+  _id:"vigente",
+  expiraEn:{$gt:new Date()}
+}).toArray()
+```
+
+Debe aparecer el documento `vigente`.
+
+### Paso 4. Crear TTL como limpieza de almacenamiento
+
+```javascript
+d.sesiones_clase.createIndex(
+  {expiraEn:1},
+  {expireAfterSeconds:0}
+)
+```
+
+La opción `expireAfterSeconds:0` expresa que la fecha `expiraEn` ya contiene el instante de caducidad. El monitor periódico borrará documentos expirados cuando corresponda. **No garantiza su eliminación exactamente en el primer milisegundo después de vencer.**
+
+### Paso 5. Interpretar la diferencia
+
+Consulta directamente el documento caducado:
+
+```javascript
+d.sesiones_clase.findOne({_id:"caducada"})
+```
+
+Puede permanecer temporalmente y después desaparecer. Lo importante es que **la consulta de validez del paso 2 ya lo había rechazado**.
+
+Una política equivocada sería «si existe el documento, permitir la operación». Una política más cuidadosa verificará identidad, validez temporal, revocación y permisos según el diseño de la aplicación.
+
+### Paso 6. Completar la explicación
+
+Indica qué hace cada uno de los siguientes mecanismos:
+
+- Autenticación: ______.
+- Autorización: ______.
+- Comprobación de `expiraEn`: ______.
+- TTL: ______.
+
+Si has entendido por qué son cuatro controles diferentes, no cometerás el error de tratar un índice como si fuera una política completa de sesiones.
+
+---
+
+# Laboratorio 13 — Informe de evidencias: qué hemos probado y qué no
+
+## La conclusión no puede ser más grande que las pruebas
+
+Después de ejecutar varios ejercicios, alguien escribe «la base de datos está completamente protegida». Esa frase no explica frente a qué amenaza, con qué configuración ni mediante qué comprobación se llega a la conclusión.
+
+Vamos a producir un informe breve, legible y **honesto sobre sus límites**.
+
+### Paso 1. Inventariar los servidores usados
+
+| Servicio | Uso | ¿Has completado sus ejercicios? |
+|---|---|---|
+| `mongo-indices` | Consultas y estructuras de acceso | ____ |
+| `mongo-seguridad` | SCRAM y permisos de roles | ____ |
+| `mongo-tls` | TLS y certificados X.509 | ____ |
+
+No marques X.509 como probado si solamente ejecutaste una conexión TLS con `ping`.
+
+### Paso 2. Resumir autenticación y autorización
+
+Para cada identidad ensayada, anota:
+- usuario y base de autenticación;
+- lectura o escritura intentada;
+- resultado esperado;
+- resultado observado;
+- causa probable si no coinciden.
+
+No escribas contraseñas ni copies claves privadas. La evidencia puede ser verificable sin filtrar secretos.
+
+### Paso 3. Resumir los controles TLS
+
+Distingue al menos:
+1. Conexión sin TLS rechazada.
+2. Conexión con TLS y CA verificada.
+3. Autenticación de cliente mediante X.509, si realizaste el ejercicio.
+4. Lectura permitida a esa identidad, cuando corresponda.
+5. Escritura denegada por un rol de solo lectura.
+
+Cada paso demuestra una propiedad diferente. Un `ping` positivo no sustituye todas estas verificaciones.
+
+### Paso 4. Señalar capacidades fuera del alcance de Community
+
+En los manuales aparecen como contenido conceptual LDAP empresarial y el cifrado nativo de MongoDB en reposo. **No se han ejecutado esas funciones sobre nuestro contenedor Community**. Debes reconocerlo expresamente en tu informe y no presentarlas como pruebas superadas.
+
+### Paso 5. Preparar una conclusión proporcional
+
+Una conclusión aceptable:
+
+> «En el servidor de laboratorio se verificó que una cuenta con rol de lectura podía consultar datos, pero no insertarlos. También se ensayó la exigencia de TLS. Estas pruebas respaldan esos controles concretos y no constituyen una evaluación integral de seguridad de producción».
+
+Una conclusión inaceptable:
+
+> «MongoDB está protegido porque todos los comandos terminaron».
+
+### Paso 6. Evaluación entre compañeros
+
+Entrega el informe a otra persona y pídele responder:
+- qué servidor se utilizó;
+- qué identidad realizó la operación;
+- qué acción se intentó;
+- qué resultado se esperaba;
+- qué resultado se observó;
+- qué controles quedaron sin probar.
+
+Si no puede responder, mejora la trazabilidad de tus afirmaciones. El propósito de esta última práctica es aprender a **justificar conclusiones**, no acumular documentos burocráticos.
