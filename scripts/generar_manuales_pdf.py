@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import sys
 import mistune
-import fitz
+from pypdf import PdfReader
 from weasyprint import HTML
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,13 +65,13 @@ def build(src, target):
     )
     target.parent.mkdir(parents=True,exist_ok=True)
     HTML(string=document,base_url=str(src.parent)).write_pdf(str(target))
-    with fitz.open(target) as pdf:
-        n=len(pdf)
-        if n < 2:
-            raise RuntimeError("Solo "+str(n)+" paginas en "+str(target))
-        if any(page.rect.width < 580 or page.rect.width>620 for page in pdf):
-            raise RuntimeError("Formato no A4 en "+str(target))
-        text="".join(page.get_text("text") for page in pdf)
+    pdf=PdfReader(str(target))
+    n=len(pdf.pages)
+    if n < 2:
+        raise RuntimeError("Solo "+str(n)+" paginas en "+str(target))
+    if any(float(page.mediabox.width)<580 or float(page.mediabox.width)>620 for page in pdf.pages):
+        raise RuntimeError("Formato no A4 en "+str(target))
+    text="".join((page.extract_text() or "") for page in pdf.pages)
         if len(text)<len(re.sub(r"(?s)"+chr(96)+chr(96)+chr(96)+r".*?"+chr(96)+chr(96)+chr(96),"",raw))*0.42:
             raise RuntimeError("Posible perdida sustancial de texto en PDF "+str(target))
     print(f"[OK] {target} - {n} paginas - {len(raw.split())} palabras",flush=True)
