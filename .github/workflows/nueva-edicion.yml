@@ -1,0 +1,55 @@
+name: PDF de la nueva edición
+
+on:
+  push:
+    branches: [reescritura/inicial-desde-cero]
+    paths:
+      - "NUEVA_EDICION/*.md"
+      - "scripts/generar_nueva_edicion_pdf.py"
+      - ".github/workflows/nueva-edicion.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pdf-nueva-edicion-${${ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  maquetar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Preparar dependencias
+        run: |
+          python -m pip install --disable-pip-version-check \
+            mistune==3.2.1 weasyprint==68.0 pypdf==5.9.0
+      - name: Crear PDF nuevos desde Markdown
+        run: python scripts/generar_nueva_edicion_pdf.py
+      - name: Verificar que existen los cinco PDF
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          names = ('INDEXACION_TEORIA','INDEXACION_PRACTICAS',
+                   'SEGURIDAD_TEORIA','SEGURIDAD_PRACTICAS','GUIA_DEL_FORMADOR')
+          for name in names:
+              p=Path("NUEVA_EDICION")/(name+".pdf")
+              assert p.exists() and p.read_bytes().startswith(b"%PDF-"), p
+              print("PDF creado:",str(p),p.stat().st_size)
+          PY
+      - name: Guardar PDF en la rama
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add NUEVA_EDICION/*.pdf
+          if git diff --cached --quiet; then
+            echo "PDF sin cambios"
+          else
+            git commit -m "docs: generar PDF de nueva edición desde cero"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
