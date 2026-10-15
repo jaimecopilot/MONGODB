@@ -67,7 +67,7 @@ def main():
         print(f"{name}: {units} fichas, {pages} páginas; objetivo {expected}")
         if units!=expected or pages!=expected:
             raise SystemExit(f"ERROR de paginación de {name}")
-    for name in ("GUIA_DEL_FORMADOR","INFORME_AUDITORIA_Y_TRAZABILIDAD"):
+    for name in ("GUIA_DEL_FORMADOR",):
         src=ROOT/"DOCENCIA"/(name+".md")
         out=dest/"DOCENCIA"/(name+".pdf")
         out.parent.mkdir(parents=True,exist_ok=True)

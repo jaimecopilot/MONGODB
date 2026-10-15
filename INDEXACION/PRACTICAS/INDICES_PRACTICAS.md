@@ -1,7 +1,5 @@
 # MongoDB 8.0 · INDICES PRACTICAS
 
-Edición contrastada con los scripts de GitHub Actions. Las cifras de explain() son medidas de una ejecución concreta, no compromisos de rendimiento. Las actividades no cubiertas por el CI se identifican como ampliación hasta tener pruebas individuales.
-
 
 <!-- Hoja didáctica 1, ficha imprimible -->
 ## Indexación
@@ -11,7 +9,7 @@ Fichas con órdenes, pruebas negativas, explicaciones causales y espacio para re
 
 
 
-**Entorno canónico:** el [repositorio GitHub](https://github.com/jaimecopilot/MONGODB) utiliza `compose.yaml` en la raíz y los archivos de `lab/`. **Solo se consideran automáticamente verificados los casos que ejecuta `.github/workflows/laboratorios.yml`.** No todos los experimentos opcionales de estas fichas están automatizados.
+**Entorno del curso:** el [repositorio MongoDB](https://github.com/jaimecopilot/MONGODB) contiene `compose.yaml` y los scripts de `lab/`. Ejecuta los pasos en el orden indicado, prepara los datos necesarios y contrasta lo que observas con el resultado explicado.
 
 ---
 
@@ -30,7 +28,8 @@ Fichas con órdenes, pruebas negativas, explicaciones causales y espacio para re
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d
+# Edita .env antes de iniciar los servicios.
+docker compose up -d --wait mongo-indices mongo-seguridad
 docker compose ps
 ```
 
@@ -57,8 +56,6 @@ Indexación: carga, línea base, índice simple, comparación, compuesto ESR, te
 <!-- Hoja didáctica 3, ficha imprimible -->
 ## Laboratorio 01 · Preparación de Docker y aislamiento
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -139,8 +136,6 @@ La corrección del ejercicio exige acreditar servicios mongo-indices y mongo-seg
 <!-- Hoja didáctica 5, ficha imprimible -->
 ## Laboratorio 02 · Carga repetible de datos
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -229,8 +224,6 @@ La corrección del ejercicio exige acreditar 200000 documentos por defecto, o 10
 <!-- Hoja didáctica 7, ficha imprimible -->
 ## Laboratorio 03 · Inspeccionar estructura y distribución
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -321,8 +314,6 @@ La corrección del ejercicio exige acreditar identificar filtros de alta y baja 
 ## Laboratorio 04 · Línea base sin índices secundarios
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Registrar nReturned, totalDocsExamined, totalKeysExamined y COLLSCAN.
@@ -410,8 +401,6 @@ La corrección del ejercicio exige acreditar registrar nReturned, totalDocsExami
 ## Laboratorio 05 · Búsqueda por número de venta
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Comparar coste de buscar una clave funcional sin índice.
@@ -498,8 +487,6 @@ La corrección del ejercicio exige acreditar comparar coste de buscar una clave 
 <!-- Hoja didáctica 13, ficha imprimible -->
 ## Laboratorio 06 · Crear índice simple por cliente
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -589,8 +576,6 @@ La corrección del ejercicio exige acreditar comprobar nombre y campo del índic
 ## Laboratorio 07 · Comparar antes y después
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Se espera IXSCAN sobre clienteId; totalDocsExamined baja mucho.
@@ -677,8 +662,6 @@ La corrección del ejercicio exige acreditar se espera IXSCAN sobre clienteId; t
 <!-- Hoja didáctica 17, ficha imprimible -->
 ## Laboratorio 08 · Rangos numéricos
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -767,8 +750,6 @@ La corrección del ejercicio exige acreditar repetir explain tras crear índice;
 <!-- Hoja didáctica 19, ficha imprimible -->
 ## Laboratorio 09 · Filtros de cardinalidad baja
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -859,8 +840,6 @@ La corrección del ejercicio exige acreditar observar plan ganador; podría sele
 ## Laboratorio 10 · Ordenación y TOP N
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Buscar SORT o recorrido ordenado de índice.
@@ -947,8 +926,6 @@ La corrección del ejercicio exige acreditar buscar SORT o recorrido ordenado de
 <!-- Hoja didáctica 23, ficha imprimible -->
 ## Laboratorio 11 · Compuesto con prefijo útil
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1038,8 +1015,6 @@ La corrección del ejercicio exige acreditar confirmar que el patrón satisface 
 ## Laboratorio 12 · Prefijo inexistente
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Leer el plan seleccionado; no asumir uso eficiente del índice {clienteId,fecha}.
@@ -1126,8 +1101,6 @@ La corrección del ejercicio exige acreditar leer el plan seleccionado; no asumi
 <!-- Hoja didáctica 27, ficha imprimible -->
 ## Laboratorio 13 · Estrategia ESR paso a paso
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1217,8 +1190,6 @@ La corrección del ejercicio exige acreditar comprobar sort y límites del índi
 ## Laboratorio 14 · Estrategia ERS comparada
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Comparar keysExamined y si necesita SORT.
@@ -1307,8 +1278,6 @@ La corrección del ejercicio exige acreditar comparar keysExamined y si necesita
 ## Laboratorio 15 · Covered query consciente
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Buscar totalDocsExamined=0 si el plan elegido cubre consulta.
@@ -1395,8 +1364,6 @@ La corrección del ejercicio exige acreditar buscar totalDocsExamined=0 si el pl
 <!-- Hoja didáctica 33, ficha imprimible -->
 ## Laboratorio 16 · Explicar el árbol de ejecución
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1486,8 +1453,6 @@ La corrección del ejercicio exige acreditar distinguir winningPlan, inputStages
 ## Laboratorio 17 · Experimentar con hint
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Comparar usando un índice fijo.
@@ -1574,8 +1539,6 @@ La corrección del ejercicio exige acreditar comparar usando un índice fijo. A�
 <!-- Hoja didáctica 37, ficha imprimible -->
 ## Laboratorio 18 · Multikey con etiquetas
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1665,8 +1628,6 @@ La corrección del ejercicio exige acreditar observar isMultiKey cuando aparezca
 ## Laboratorio 19 · Multikey y arrays anidados
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Comprobar índice compuesto con un array y un escalar.
@@ -1754,8 +1715,6 @@ La corrección del ejercicio exige acreditar comprobar índice compuesto con un 
 <!-- Hoja didáctica 41, ficha imprimible -->
 ## Laboratorio 20 · Búsqueda textual clásica
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -1845,8 +1804,6 @@ La corrección del ejercicio exige acreditar localizar descripciones y distingui
 ## Laboratorio 21 · Relevancia por textScore
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Comparar ranking y términos de búsqueda.
@@ -1933,8 +1890,6 @@ La corrección del ejercicio exige acreditar comparar ranking y términos de bú
 <!-- Hoja didáctica 45, ficha imprimible -->
 ## Laboratorio 22 · Geoespacial 2dsphere
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -2024,8 +1979,6 @@ La corrección del ejercicio exige acreditar validar que se recuperan puntos en 
 ## Laboratorio 23 · Índice hashed
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Comprobar accesos de igualdad y limitación conceptual de rangos.
@@ -2113,8 +2066,6 @@ La corrección del ejercicio exige acreditar comprobar accesos de igualdad y lim
 <!-- Hoja didáctica 49, ficha imprimible -->
 ## Laboratorio 24 · Unicidad sin interferir con ventas
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -2205,8 +2156,6 @@ La corrección del ejercicio exige acreditar comprobar que el primer insert func
 ## Laboratorio 25 · Doble clave y error E11000
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
-
 ### Resultado profesional perseguido
 
 Identificar el código 11000 como integridad, no conectividad.
@@ -2293,8 +2242,6 @@ La corrección del ejercicio exige acreditar identificar el código 11000 como i
 <!-- Hoja didáctica 53, ficha imprimible -->
 ## Laboratorio 26 · Índices parciales
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
 
 ### Resultado profesional perseguido
 
@@ -2383,8 +2330,6 @@ La corrección del ejercicio exige acreditar revisar si el filtro de la consulta
 <!-- Hoja didáctica 55, ficha imprimible -->
 ## Laboratorio 27 · TTL y fechas BSON
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
 
 ### Resultado profesional perseguido
 
@@ -2475,8 +2420,6 @@ La corrección del ejercicio exige acreditar verificar que creadoEn sea BSON Dat
 ## Laboratorio 28 · TTL: conservar documento reciente
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** fenómeno principal reproducido y comprobado en GitHub Actions. Los contrastes de ampliación de esta ficha no se deducen automáticamente de ese resultado.
-
 ### Resultado profesional perseguido
 
 Verificar que un documento reciente permanece al principio.
@@ -2564,8 +2507,6 @@ La corrección del ejercicio exige acreditar verificar que un documento reciente
 <!-- Hoja didáctica 59, ficha imprimible -->
 ## Laboratorio 29 · Ocultar índice sin borrarlo
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** ejercicio de ampliación no ejecutado como comprobación independiente en GitHub Actions. Sus resultados son hipótesis a verificar, no salidas medidas.
 
 ### Resultado profesional perseguido
 
@@ -2655,8 +2596,6 @@ La corrección del ejercicio exige acreditar inspeccionar hidden:true y repetir 
 ## Laboratorio 30 · Estadísticas de uso
 *Ejecución paso a paso*
 
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
-
 ### Resultado profesional perseguido
 
 Observar operaciones de uso del índice desde las estadísticas disponibles.
@@ -2743,8 +2682,6 @@ La corrección del ejercicio exige acreditar observar operaciones de uso del ín
 <!-- Hoja didáctica 63, ficha imprimible -->
 ## Laboratorio 31 · Tamaño e inventario final
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 
@@ -2833,8 +2770,6 @@ La corrección del ejercicio exige acreditar interpretar dataSize, storageSize e
 <!-- Hoja didáctica 65, ficha imprimible -->
 ## Laboratorio 32 · Caso integrador de diagnóstico
 *Ejecución paso a paso*
-
-**Nivel de evidencia:** parte del comportamiento se ha observado en GitHub Actions; la secuencia o interpretación específica de esta ficha necesita ensayo individual antes de impartirla.
 
 ### Resultado profesional perseguido
 

@@ -2,7 +2,7 @@ name: Publicar manuales PDF
 
 on:
   push:
-    branches: [main, docs/publicar-pdfs-y-md]
+    branches: [main, limpieza/materiales-docentes]
     paths:
       - "INDEXACION/**/*.md"
       - "SEGURIDAD/**/*.md"
