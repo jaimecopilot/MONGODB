@@ -751,6 +751,154 @@ Elige una de las cuatro preguntas y explica por qué tu índice propuesto tiene 
 
 ---
 
+## 21. Un árbol de búsqueda no es un array desordenado
+
+La palabra *B-tree* aparece con frecuencia al hablar de índices, pero puede resultar vacía si nadie explica qué ventaja tiene. Imagina una lista de cien mil números escritos al azar. Para encontrar uno, quizás debas revisarlos uno a uno.
+
+Ahora imagina una guía ordenada con separadores. Primero decides en qué intervalo se encuentra el número; después buscas en una sección más pequeña y terminas en la referencia concreta. Ese es el principio conceptual de una estructura de búsqueda organizada.
+
+### Por qué hablamos de «árbol»
+
+Un árbol organiza información en niveles y permite seguir caminos a partir de comparaciones de claves. Los detalles internos reales del motor son más complejos que un dibujo escolar, pero podemos pensar en un recorrido:
+
+```text
+                     [1000 | 5000]
+                        /    |    \
+                   menores  medios  mayores
+                             |
+                      [1200|2500|4000]
+                             |
+                          clave 1987
+                             |
+                     referencia al dato
+```
+
+Este esquema no representa páginas físicas exactas. Solo visualiza que podemos **reducir el espacio de búsqueda** sin examinar uno por uno todos los documentos.
+
+### Por qué esto ayuda con rangos
+
+Una vez localizada una clave como `importe = 100`, las claves ordenadas permiten recorrer un intervalo hasta llegar al límite. Por eso los índices normales pueden ayudar a `$gte` y `$lt`, no solo a igualdades.
+
+### Dónde se mantiene el coste
+
+El árbol no es gratuito. Cuando se inserta una venta nueva, el motor tiene que mantener orden, páginas y referencias. No debemos imaginar que los datos se ordenan mágicamente una sola vez y permanecen fijos para siempre.
+
+### La pregunta adecuada
+
+No hace falta que un alumno sepa implementar un árbol B para utilizar índices con criterio. Sí debe comprender qué ventaja ofrece la organización de claves y por qué mantenerla tiene un coste cuando los datos cambian.
+
+---
+
+## 22. Lo que el índice NO hace: no reemplaza el documento original
+
+Cuando alguien ve una consulta cubierta, podría creer que la colección ya no importa. Pero el índice solo guarda la información prevista en sus claves y referencias. Los documentos siguen siendo la fuente de datos que la aplicación puede consultar.
+
+### Una búsqueda que necesita más campos
+
+```javascript
+db.ventas.find(
+  {clienteId: 901},
+  {_id: 0, clienteId: 1, importe: 1, descripcion: 1}
+)
+```
+
+Si usamos un índice con `clienteId` e `importe`, todavía falta `descripcion`. MongoDB puede recorrer la estructura indexada para encontrar candidatos y después recuperar los documentos necesarios.
+
+### Por qué FETCH no es malo por sí mismo
+
+Una etapa `FETCH` significa que se han recuperado documentos. En muchos casos eso es exactamente lo que la aplicación necesita. El objetivo no es eliminar toda etapa `FETCH` como si fuera un error, sino reducir trabajo innecesario y satisfacer las consultas importantes.
+
+### Qué ocurre al actualizar un documento
+
+Si cambia `importe`, MongoDB debe reflejar ese cambio en los índices que contienen el campo. Si cambia únicamente `descripcion` y el índice no la incluye, las consecuencias de mantenimiento serán diferentes. El índice no es una copia universal que se actualiza siempre de la misma manera.
+
+### Cuándo no conviene cubrir una consulta
+
+Añadir un campo de descripción largo a una clave solo para evitar `FETCH` puede causar más coste del que ahorra. El diseño requiere un equilibrio entre lectura, escritura, espacio y frecuencia de uso.
+
+---
+
+## 23. Un número de venta no es necesariamente el _id
+
+MongoDB crea de manera automática un identificador `_id` para los documentos que no especifican uno. En el laboratorio también utilizamos un número de negocio llamado `numero`.
+
+¿Por qué conservar ambos conceptos? Porque una aplicación puede necesitar un identificador técnico que distinga documentos y, al mismo tiempo, un número de factura o de venta con significado comercial.
+
+### Dos consultas con filtros distintos
+
+```javascript
+db.ventas.findOne({_id: 199998})
+db.ventas.findOne({numero: 199998})
+```
+
+Aunque en un conjunto de datos de prueba puedan coincidir sus valores, no es correcto afirmar que ambos filtros usan el mismo índice. La primera consulta puede aprovechar el índice obligatorio `_id_`; la segunda necesita un índice apropiado sobre `numero` para obtener un acceso similar.
+
+### Qué añade unique
+
+Un índice `unique` sobre `numero` expresa una regla de negocio: que no se repita el número. La misma propiedad puede servir para garantizar unicidad de un par como `{anio,numero}` cuando las facturas vuelven a numerarse cada año.
+
+### El problema del esquema incorrecto
+
+Si algunas ventas almacenan `numero` como texto y otras como número, un índice no convierte automáticamente esos valores en una representación coherente. Antes de diseñar índices tenemos que definir y validar la forma de los datos.
+
+### Pregunta de comprobación
+
+¿Puede existir una colección con índice `_id_` y, sin embargo, sufrir un recorrido completo al buscar por `numero`? Sí. Tener *algún índice* no equivale a tener el índice que necesita la consulta.
+
+---
+
+## 24. Una decisión profesional con tres consultas que compiten
+
+La librería añade tres pantallas:
+
+- Consulta de atención: una venta por su número.
+- Consulta de contabilidad: las ventas de un cliente ordenadas por fecha.
+- Consulta comercial: las últimas ventas pagadas de Madrid.
+
+Un equipo inexperto podría intentar crear un índice enorme con todos los campos disponibles. Eso no garantiza resolver las tres pantallas y aumenta recursos de mantenimiento.
+
+### Diseñar por patrones, no por catálogos de columnas
+
+Para la primera pantalla tiene sentido un índice muy selectivo sobre `numero`. La segunda sugiere `{clienteId:1,fecha:-1}`. La tercera podría estudiar campos de igualdad como `tienda` y `estado`, seguidos de la ordenación por fecha.
+
+La secuencia de claves importa. Un índice con `fecha` como último campo no proporciona orden global por fecha si antes se agrupa por distintos valores de tienda y estado.
+
+### Evaluar el coste de escrituras
+
+Cada venta nueva debe actualizar los índices pertinentes. Crear otros diez índices parecidos solo porque existen múltiples combinaciones de filtros podría penalizar el servicio de registro de pedidos.
+
+### Pensar en criterios de prioridad
+
+¿Qué consulta se ejecuta miles de veces por minuto? ¿Cuál tiene una exigencia de respuesta más estricta? ¿Qué proporción de la colección devuelve? ¿Con qué frecuencia se actualizan esos campos? Esas preguntas convierten la indexación en una decisión de ingeniería.
+
+### El resultado defendible
+
+No siempre habrá un solo índice perfecto. Un buen diseño es un conjunto pequeño de índices justificados, medidos y revisables. Si cambian las consultas o la distribución de datos, cambia también lo que merece mantenerse.
+
+---
+
+## 25. Errores de razonamiento frecuentes: un examen sin comandos
+
+Para comprobar si has entendido los mecanismos, responde a estas afirmaciones. No necesitas MongoDB abierto: se trata de explicar por qué cada razonamiento sería correcto o incorrecto.
+
+**«He creado un índice, así que todas las consultas son más rápidas».** Incorrecto. Un índice sirve a determinadas consultas y puede introducir costes de mantenimiento. El planificador puede no utilizarlo.
+
+**«Si explain muestra IXSCAN, la consulta ya no cuesta nada».** Incorrecto. Puede examinar miles de claves, recuperar documentos, ordenar o hacer otro trabajo. Hay que observar todo el plan y sus contadores.
+
+**«Una consulta con limit(5) siempre lee cinco documentos».** Incorrecto. Puede necesitar examinar muchos candidatos antes de identificar cuáles cumplen filtro y orden.
+
+**«Un índice hashed sirve igual para un rango que para igualdad».** Incorrecto. El hash no preserva la ordenación natural necesaria para esa clase de búsqueda por rango.
+
+**«Un índice TTL elimina el documento exactamente al caducar».** Incorrecto. La eliminación física la realiza un monitor asíncrono; la fecha de expiración debe tratarse con la semántica adecuada en la aplicación.
+
+**«Un índice de texto clásico equivale a buscar cualquier subcadena».** Incorrecto. La búsqueda utiliza términos y reglas de análisis; no es una comparación arbitraria carácter por carácter.
+
+**«Si hay un índice único, la base tiene datos válidos en todos sus campos».** Incorrecto. La unicidad garantiza únicamente la restricción de clave correspondiente.
+
+Cuando puedas justificar cada respuesta con un ejemplo propio habrás adquirido una base conceptual suficiente para interpretar situaciones nuevas, no solo reproducir el código de clase.
+
+---
+
 ## Glosario mínimo
 
 **Base de datos:** agrupación lógica de colecciones. **Colección:** conjunto de documentos. **Documento:** registro estructurado, con campos y valores. **Índice:** estructura auxiliar mantenida para determinadas operaciones. **Clave:** valor o conjunto de valores indexados. **Plan:** estrategia elegida para resolver una consulta. **COLLSCAN:** recorrido de colección. **IXSCAN:** recorrido de entradas de índice. **FETCH:** lectura de documentos. **Selectividad:** proporción de documentos que cumplen el filtro. **Cardinalidad:** cantidad de valores distintos. **TTL:** política de caducidad de documentos mediante índice de fechas.
