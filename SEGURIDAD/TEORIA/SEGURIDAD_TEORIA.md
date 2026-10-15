@@ -437,3 +437,251 @@ Ninguna medida sustituye por completo a las otras. La seguridad no es un único 
 5. ¿Por qué no sería correcto afirmar que la práctica ha validado LDAP o el cifrado nativo en reposo en Community?
 
 La práctica avanzada comenzará comprobando TLS como canal, continuará con la identidad X.509 y terminará con una operación de lectura permitida y una escritura denegada. Los detalles empresariales se estudiarán como arquitectura, no como resultados inventados.
+
+
+---
+
+# Unidad 8 — Diseño de amenazas: cómo decidir qué proteger antes de escoger una opción de MongoDB
+
+## Un sistema no es seguro solamente porque «se puede iniciar sesión»
+
+Tenemos una pequeña aplicación de pedidos. Sus usuarios trabajan desde una oficina y, ocasionalmente, desde fuera de ella. Los empleados consultan pedidos, el servicio web registra otros nuevos y el equipo de soporte corrige incidencias. La base de datos contiene nombres y direcciones de entrega; la pérdida o alteración de esos datos tendría consecuencias.
+
+Antes de configurar MongoDB es imprescindible determinar **qué daños queremos impedir**. Esta actividad se conoce como modelado de amenazas. No requiere ser especialista en criptografía: consiste en examinar actores, recursos, caminos de acceso y efectos de un incidente.
+
+Distingamos cuatro ejemplos:
+
+1. **Un visitante anónimo intenta leer pedidos.** Necesitamos cerrar el acceso desde redes no autorizadas y comprobar identidades y permisos.
+2. **Una cuenta de informes intenta borrar una colección.** El problema no es que falte TLS; el problema es que una identidad puede tener más acciones de las necesarias.
+3. **Alguien intercepta una conexión entre la aplicación y el servidor.** Debemos proteger y autenticar el canal mediante TLS correctamente configurado.
+4. **Se pierde el disco y alguien recupera una copia del almacenamiento.** El control relevante es el cifrado en reposo y la custodia de sus claves, no la contraseña que introduce la aplicación en una conexión.
+
+Si añadimos una contraseña administrativa compleja, pero todas las aplicaciones utilizan esa misma cuenta `root`, hemos mejorado solo una parte del sistema. Un programa comprometido podría actuar con todos los privilegios de esa cuenta.
+
+## Construir una matriz de amenazas
+
+Una matriz sencilla ayuda a no mezclar problemas:
+
+| Recurso | Amenaza | Control candidato | Cómo comprobarlo |
+|---|---|---|---|
+| Colección de pedidos | Lectura anónima | Autenticación y red restringida | Intento anónimo rechazado |
+| Colección de pedidos | Borrado con cuenta de lectura | RBAC con mínimo privilegio | `deleteOne` denegado |
+| Comunicación cliente-servidor | Intercepción o suplantación | TLS y verificación de certificados | Conexión sin TLS rechazada; con CA válida |
+| Claves y contraseñas | Publicación accidental | Gestión de secretos | Revisión de ficheros, permisos y repositorio |
+| Copia de seguridad | Exposición de datos almacenados | Cifrado y acceso restringido | Inspección de configuración y restauración controlada |
+
+La tabla separa **medidas propuestas** y **pruebas que podrían respaldarlas**. No confundas «he escrito TLS en el documento de arquitectura» con «TLS está realmente funcionando y se validan los certificados».
+
+## Qué no vamos a simular en el laboratorio
+
+El laboratorio se ejecuta con MongoDB Community 8.0 y contenedores efímeros. Podemos demostrar autenticación SCRAM, asignación de roles, denegaciones, TLS y X.509. No podemos declarar probado el cifrado nativo de MongoDB Enterprise en reposo ni una integración LDAP empresarial mediante unos comandos comunitarios que jamás podrían ejercer esas capacidades. Los temas se explican como arquitectura y requisitos de producto.
+
+La evidencia debe respetar siempre el alcance real de la instalación.
+
+---
+
+# Unidad 9 — Usuarios, secretos y conexiones de aplicaciones
+
+## No todas las cuentas deben vivir eternamente
+
+En una aplicación, los servicios suelen necesitar credenciales para conectarse sin intervención humana. Eso crea una responsabilidad distinta de la del alumno que escribe una contraseña manualmente en `mongosh`. Las credenciales de la aplicación deben poder distribuirse de forma controlada, renovarse y retirarse si dejan de ser confiables.
+
+Una cuenta de laboratorio llamada `escritorlab` representa una responsabilidad funcional, no necesariamente una persona. La aplicación que registra pedidos podría tener una identidad parecida, pero con permisos aún más acotados.
+
+El ciclo de vida de una identidad comprende:
+- **Alta:** se justifica la necesidad de acceso y se asignan permisos mínimos.
+- **Uso:** las credenciales se entregan al componente autorizado y se protegen.
+- **Revisión:** se comprueba si los permisos siguen siendo necesarios.
+- **Rotación:** se reemplazan secretos cuando corresponde.
+- **Retirada:** se impide continuar utilizando una identidad que ya no se necesita.
+
+Crear cuentas es solo el primer paso. Una instalación que acumula usuarios antiguos con permisos excesivos puede seguir funcionando, pero no cumple una buena disciplina de seguridad.
+
+## El problema de las contraseñas incrustadas
+
+Considera un fragmento como este:
+
+```javascript
+const contraseña = "MiClaveSuperSecreta";
+```
+
+Si se guarda en el repositorio, cualquiera con acceso al código puede verla. Si se copia en guías o capturas, la exposición se multiplica. La solución no consiste en cambiar el nombre de la variable a `passwordSegura`.
+
+Para el laboratorio se utiliza un archivo `.env` local, excluido de Git, con valores que **deben sustituirse** por contraseñas de demostración. Este método simplifica la clase y evita publicarlas en el repositorio, pero **no es un gestor profesional de secretos**.
+
+En producción, es necesario estudiar sistemas de custodia de secretos, identidades de servicios, permisos sobre archivos, procedimientos de recuperación y mecanismos de rotación que permitan cambiar credenciales sin interrumpir indebidamente la operación.
+
+## URI de conexión: un formato cómodo, con riesgos
+
+Una aplicación MongoDB puede utilizar una URI como:
+
+```text
+mongodb://usuario:contraseña@servidor:27017/base?authSource=admin
+```
+
+Esta línea es **un esquema explicativo**, no un conjunto de credenciales válidas para pegar. La URI indica el protocolo, datos de autenticación, servidor, puerto, base y opciones. Si se escribe completa con una contraseña verdadera en un log, una captura o un commit, puede quedar expuesta.
+
+También es importante el tratamiento correcto de caracteres especiales. Una contraseña que contiene símbolos reservados en las URI puede necesitar codificación adecuada. Una cadena de conexión mal formada puede ocasionar un fallo que parece de autenticación cuando realmente corresponde a cómo se representó el secreto.
+
+En las prácticas preferimos pasar la contraseña a `mongosh` de forma interactiva o utilizar variables de entorno en procedimientos controlados; evitamos mostrar credenciales reales en el texto docente.
+
+## La base authSource no concede permisos
+
+Supongamos que la cuenta `adminlab` se autentica en la base `admin`. Eso no significa automáticamente que «el usuario es administrador» porque escribimos la palabra `admin` en `--authenticationDatabase`.
+
+Lo que concede operaciones son **los roles efectivos asociados a esa identidad**, no el nombre de la base contra la que se comprueban las credenciales. Podemos tener una cuenta autenticada en `admin` con poderes muy limitados y otra autenticada en una base de aplicación con permisos ajustados a esa aplicación.
+
+### Caso de análisis
+
+Una aplicación utiliza una URI que conecta con `curso_seguridad` pero especifica `authSource=admin`. La cuenta `lectorlab` existe en `curso_seguridad`. El inicio de sesión falla.
+
+Antes de cambiarle los roles, investiga la base donde se creó el usuario y la indicada para autenticar. **Añadir `root` no corrige una cuenta buscada en la base equivocada.**
+
+---
+
+# Unidad 10 — Cómo investigar incidentes sin destruir la evidencia
+
+## El caso: «MongoDB no me deja entrar»
+
+Un usuario informa que no puede ejecutar su consulta. La reacción impulsiva puede ser reiniciar Docker, borrar un volumen, cambiar contraseñas o conceder privilegios amplios. Todas esas acciones pueden ocultar o empeorar el problema.
+
+Un diagnóstico ordenado empieza por separar capas.
+
+**Primera capa: estado del servicio.** Comprobamos si el contenedor funciona y si `mongod` está preparado. `docker compose ps` y los logs ayudan a localizar fallos de inicio, rutas inexistentes, certificados caducados o problemas de recursos.
+
+**Segunda capa: conexión.** Verificamos que el cliente utiliza el servidor y puerto correctos. La instancia `mongo-indices` no es la misma que `mongo-seguridad`, aunque ambas sean MongoDB.
+
+**Tercera capa: autenticación.** Identificamos el usuario, el mecanismo y la base de autenticación. Una contraseña incorrecta se resuelve comprobando credenciales, no cambiando permisos de escritura.
+
+**Cuarta capa: autorización.** Si la identidad funciona, pero una operación falla, revisamos roles y recursos. Es posible que sea una denegación deseada.
+
+**Quinta capa: lógica de consulta.** Una consulta que devuelve cero documentos puede ser técnicamente válida. Tal vez el filtro no coincide con los datos, se consultó otra base o el identificador no existe.
+
+Cada capa tiene una pregunta distinta. **No podemos diagnosticar las cinco con un solo comando `ping`.**
+
+## Cómo escribir un informe útil
+
+Un informe de fallo que diga «no funciona» obliga a otra persona a adivinarlo todo. Es mejor registrar:
+
+- Acción que se intentó realizar, sin copiar contraseñas.
+- Servicio y base de datos usados.
+- Identidad o tipo de identidad empleado, sin secretos.
+- Mensaje significativo del error.
+- Resultado de una prueba de control, como una lectura permitida.
+- Hipótesis razonada y siguiente comprobación propuesta.
+
+No incluyas tokens, claves privadas, contraseñas, datos personales o volcados indiscriminados de logs en el informe.
+
+## El papel de los registros y de la auditoría
+
+Los logs operativos ayudan a saber qué ocurrió en el proceso servidor, pero **no son una garantía universal de trazabilidad de cada operación sobre datos**. Una política de auditoría formal requiere decidir qué acciones registrar, cómo conservar las evidencias, cómo protegerlas frente a manipulación y qué obligaciones normativas se aplican.
+
+En MongoDB determinadas capacidades avanzadas de auditoría dependen de la edición y configuración. Nuestro laboratorio no pretende simular un sistema regulado de auditoría. Sí muestra cómo verificar denegaciones reales y cómo conservar una descripción legible de las pruebas.
+
+## Un ejercicio completo de diagnóstico
+
+Te entregan esta secuencia:
+
+1. `docker compose ps` confirma que `mongo-seguridad` está saludable.
+2. `adminlab` puede realizar `ping`.
+3. `lectorlab` consigue leer `curso_seguridad.secretos`.
+4. `lectorlab` recibe `Unauthorized` al ejecutar `insertOne`.
+
+El mensaje final no indica que MongoDB se haya averiado. Demuestra que la identidad lectora carece de permiso de escritura, tal como esperábamos.
+
+Ahora cambia el paso 3: la lectura también falla por autenticación. ¿Qué revisarías? El orden razonable es servidor, usuario, contraseña y `authSource`, antes de investigar reglas de escritura.
+
+---
+
+# Unidad 11 — TLS y certificados: errores que un principiante debe poder distinguir
+
+## Un canal cifrado puede fallar por distintos motivos
+
+Cuando activamos `requireTLS` en el servidor, la conexión del cliente debe negociar TLS. Pero no todas las situaciones que terminan en un error TLS tienen la misma causa.
+
+**Caso A: cliente sin TLS.** El servidor exige canal cifrado; la negociación no puede realizarse como el cliente intenta. La solución es utilizar TLS correctamente, no desactivarlo en el servidor por comodidad.
+
+**Caso B: CA desconocida.** El servidor presenta un certificado firmado por una autoridad que el cliente no reconoce como confiable. Debemos proporcionar la CA adecuada o corregir la instalación de confianza; no aceptar cualquier certificado sin verificar.
+
+**Caso C: nombre del certificado no coincide.** El certificado es válido para un nombre, pero el cliente se conecta usando otro. La validación de identidad del servidor debe tener en cuenta los nombres declarados en el certificado, como los campos SAN correspondientes.
+
+**Caso D: certificado caducado.** Un certificado tiene un intervalo de validez. Utilizarlo fuera de ese periodo debe tratarse mediante emisión y renovación apropiadas, no atrasando el reloj del equipo.
+
+**Caso E: clave privada inaccesible.** El servidor puede conocer la ruta de `server.pem`, pero el proceso no tiene permisos para leerlo. Este es un problema de ficheros o configuración, no de los roles de las colecciones.
+
+En el laboratorio tenemos una CA de demostración, certificados con validez muy corta y nombres preparados para localhost y el servicio. Sus permisos están simplificados únicamente para contenedores efímeros. **No deben copiarse a producción como procedimiento de custodia de claves.**
+
+## La cadena de confianza no es la autorización
+
+Una cuenta que presenta un certificado válido puede estar autenticada por X.509. Pero eso no concede automáticamente privilegios de lectura o escritura en todas las colecciones.
+
+Piensa en un pasaporte: demostrar la identidad con un documento auténtico no significa tener permiso para entrar en todas las dependencias de un edificio. En MongoDB, una identidad X.509 tiene que estar asociada a roles adecuados.
+
+El laboratorio comprueba una lectura permitida y una inserción denegada **con el mismo certificado de cliente**. Esa es una forma clara de separar autenticación y autorización.
+
+## Un esquema mental de la conexión
+
+```text
+CLIENTE                           SERVIDOR MONGODB
+   |                                   |
+   |---- solicita conexión TLS ------>|
+   |<--- presenta certificado --------|
+   |  verifica CA, nombre y validez   |
+   |---- negocia canal protegido ---->|
+   |                                   |
+   |-- presenta identidad SCRAM/X509 ->|
+   |<-- autenticación aceptada --------|
+   |                                   |
+   |--- solicita acción sobre datos -->|
+   |<-- autorización permite/deniega --|
+```
+
+Este dibujo simplifica el protocolo real. Su finalidad no es describir cada mensaje criptográfico, sino mostrar que **formar el canal, demostrar identidad y conceder una operación son decisiones diferentes**.
+
+## El error de «funciona con verificación desactivada»
+
+Si una conexión solo se establece cuando el cliente desactiva la comprobación de certificados, **no podemos declarar la seguridad TLS correctamente verificada**. El canal puede estar cifrado, pero la identidad del servidor podría no haberse validado como exigía nuestra política.
+
+En las prácticas buscamos que la conexión funcione **validando la CA**, no «sea como sea». Esa distinción es esencial para una persona que se inicia en la administración de bases de datos.
+
+---
+
+# Unidad 12 — Rúbrica final de decisiones de seguridad
+
+## Un caso integrador
+
+Una organización ficticia tiene tres procesos: lector de informes, registrador de pedidos y tarea de administración. Utiliza MongoDB y necesita proteger su base de pedidos.
+
+Para el lector:
+- Identidad independiente.
+- Permiso de consulta sobre los recursos estrictamente necesarios.
+- Prueba de lectura permitida.
+- Prueba de inserción y borrado denegados.
+
+Para el registrador:
+- Identidad distinta.
+- Privilegios de escritura sobre las colecciones adecuadas.
+- Prueba de inserción permitida.
+- Prueba de administración de usuarios denegada.
+
+Para tareas administrativas:
+- Identidad reservada.
+- Uso controlado y supervisado.
+- No emplearla como credencial habitual de una pantalla de usuario.
+
+En cuanto a la conexión:
+- Restringir la exposición de red.
+- Proteger canales cuando corresponda con TLS, validando identidad del servidor.
+- Evitar contraseñas y claves incrustadas en repositorios.
+- Definir mecanismos de rotación y recuperación.
+
+En cuanto al almacenamiento:
+- Evaluar cifrado en reposo del sistema o edición apropiada.
+- Proteger copias y comprobar restauraciones.
+- No confundir funcionamiento con respaldo real de políticas empresariales.
+
+## Qué entregaría un profesional
+
+No entregaría únicamente una lista de diez comandos. Entregaría una **matriz de identidades y permisos**, una descripción de conexiones seguras, un listado de pruebas positivas y negativas y un diagnóstico de los controles no ensayados. La conclusión debe corresponder a la evidencia real.
+
+**Una instalación de laboratorio que supera SCRAM, RBAC y X.509 no queda automáticamente certificada para producción.** Haber aprendido los mecanismos fundamentales permite formular mejores preguntas, no sustituye una evaluación de seguridad del sistema completo.
