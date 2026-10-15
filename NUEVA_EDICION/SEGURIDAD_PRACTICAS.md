@@ -690,6 +690,540 @@ Si tus resultados son diferentes, **no ajustes las respuestas para hacerlas coin
 
 ---
 
+## 14. Confirmar con qué identidad estás trabajando
+
+En seguridad es fácil probar accidentalmente una operación como administrador y concluir que el lector tiene permisos. Vamos a verificar el contexto de la sesión antes de interpretar cualquier resultado.
+
+### Paso 1. Abrir como lector
+
+En la **terminal**:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username lectorlab --authenticationDatabase curso_seguridad --password
+```
+
+Introduce la contraseña del lector.
+
+### Paso 2. Preguntar qué conexión reconoce el servidor
+
+Dentro de `mongosh`:
+
+```javascript
+db.runCommand({connectionStatus: 1})
+```
+
+Busca el apartado de información de autenticación y los roles. La forma exacta de la respuesta depende de la versión; el dato importante es que estás autenticado como `lectorlab` y no como `adminlab`.
+
+### Paso 3. Comprobar una lectura conocida
+
+```javascript
+use curso_seguridad
+db.secretos.findOne({_id: "demo-1"})
+```
+
+Esperamos que pueda leer. La pareja «identidad correcta + lectura exitosa» da una base sólida para la siguiente prueba negativa.
+
+### Interpretar
+
+No confundas el nombre que aparece en el prompt de `mongosh` con el nombre del usuario autenticado. El prompt puede mostrar la base actual, no la identidad.
+
+**Si los roles no son los esperados:** sal de la sesión y vuelve a conectarte como el usuario adecuado. Si crees que se han alterado sus privilegios, un administrador debe inspeccionar su definición antes de modificar nada.
+
+---
+
+## 15. Actualizar sin permiso: una denegación distinta de insertar
+
+Antes comprobamos que el lector no podía insertar. Ahora veremos que el mismo principio protege modificaciones sobre registros existentes.
+
+### Paso 1. Identificar un documento que existe
+
+Como `lectorlab`, dentro de `mongosh`:
+
+```javascript
+use curso_seguridad
+db.secretos.findOne({_id: "demo-1"})
+```
+
+Anota el valor del campo `texto`.
+
+### Paso 2. Intentar modificarlo
+
+```javascript
+db.secretos.updateOne(
+  {_id: "demo-1"},
+  {$set: {texto: "modificado sin permiso"}}
+)
+```
+
+Debe producirse una denegación de autorización. Ese rechazo es un **resultado correcto** del ejercicio, no una razón para conceder `root`.
+
+### Paso 3. Verificar que no ha cambiado
+
+```javascript
+db.secretos.findOne({_id: "demo-1"})
+```
+
+El texto inicial debería mantenerse.
+
+### Qué has demostrado
+
+El usuario pudo autenticar y leer, pero no obtuvo autorización para `updateOne`. Si el intento hubiera fallado por un error de sintaxis, no estaríamos demostrando permisos; por eso importa revisar el mensaje concreto.
+
+**Si se actualiza correctamente:** comprueba con `connectionStatus` si realmente trabajas como `lectorlab` y verifica los roles asignados.
+
+---
+
+## 16. Borrar sin permiso: proteger un registro ya conocido
+
+La palabra «borrar» puede intimidar, pero el laboratorio está diseñado para comprobar un rechazo sin eliminar el dato original.
+
+### Paso 1. Verificar qué documento vamos a proteger
+
+Conectado como lector:
+
+```javascript
+use curso_seguridad
+db.secretos.findOne({_id: "demo-1"})
+```
+
+### Paso 2. Intentar borrarlo
+
+```javascript
+db.secretos.deleteOne({_id: "demo-1"})
+```
+
+Esperamos `Unauthorized` u otro error equivalente de permisos. No debería eliminarse el registro.
+
+### Paso 3. Confirmar que sigue ahí
+
+```javascript
+db.secretos.findOne({_id: "demo-1"})
+```
+
+Debe seguir apareciendo.
+
+### La pregunta difícil
+
+Si en lugar de un lector utilizáramos una cuenta `readWrite`, ¿podríamos borrar el documento? Es posible, según los permisos asignados y la operación; por eso `readWrite` no debe ofrecerse a procesos que solo necesitan consultar.
+
+### Una precaución útil
+
+No copies este experimento sobre una colección empresarial. Aquí usamos un registro ficticio que hemos preparado precisamente para estudiar accesos permitidos y denegados.
+
+---
+
+## 17. Un rol personalizado que solo permite consultar una colección
+
+Hasta ahora hemos utilizado roles incorporados. Es útil comprender que una organización puede necesitar permisos más específicos: alguien puede requerir lectura de `secretos` sin acceso general a otras colecciones de la base.
+
+Esta práctica es **de ampliación** y modifica la configuración de usuarios de prueba. Trabaja únicamente en la base del curso.
+
+### Paso 1. Abrir sesión como administrador
+
+En la **terminal**:
+
+```bash
+docker compose exec mongo-seguridad mongosh --username adminlab --authenticationDatabase admin --password
+```
+
+### Paso 2. Crear un rol específico
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_seguridad
+db.createRole({
+  role: "soloConsultarSecretos",
+  privileges: [{
+    resource: {db: "curso_seguridad", collection: "secretos"},
+    actions: ["find"]
+  }],
+  roles: []
+})
+```
+
+**Qué significa:** el rol contiene un privilegio `find` sobre una colección concreta. No otorga automáticamente escritura ni administración.
+
+Si MongoDB indica que el rol ya existe porque repetiste el ejercicio, inspecciónalo antes de intentar crearlo de nuevo. No elimines roles ajenos al laboratorio.
+
+### Paso 3. Crear una cuenta de ampliación
+
+En la sesión interactiva como administrador:
+
+```javascript
+db.createUser({
+  user: "consultorlab",
+  pwd: passwordPrompt(),
+  roles: [{role: "soloConsultarSecretos", db: "curso_seguridad"}]
+})
+```
+
+`passwordPrompt()` solicita una contraseña de manera interactiva cuando está disponible en `mongosh`. Usa una contraseña de prueba distinta de las demás y consérvala solo para este laboratorio.
+
+### Paso 4. Probar la cuenta
+
+Sal del administrador y conecta como `consultorlab`. Verifica `findOne` en `secretos` y una inserción denegada. No basta comprobar que el comando de creación devolvió éxito; la validez de la política se observa con la identidad afectada.
+
+---
+
+## 18. Revocar un rol y recuperarlo sin perder el control
+
+Los permisos pueden cambiar. Una persona pierde temporalmente el acceso a ciertas ventas y después lo recupera.
+
+**No hagas esta prueba en la cuenta administradora.** Utilizaremos `lectorlab` porque es desechable.
+
+### Paso 1. Observar el estado inicial
+
+Conecta como `lectorlab` y comprueba que puede leer `demo-1`. Sal después de la sesión.
+
+### Paso 2. Revocar como administrador
+
+```javascript
+use curso_seguridad
+db.revokeRolesFromUser(
+  "lectorlab",
+  [{role: "read", db: "curso_seguridad"}]
+)
+```
+
+Ejecuta esto **solo** en una sesión autenticada como `adminlab` y tras comprobar que estás en la base `curso_seguridad`.
+
+### Paso 3. Reconectar como lector
+
+Abre una nueva sesión como `lectorlab` e intenta leer `demo-1`. Esperamos que carezca de permisos para ese acceso.
+
+### Paso 4. Restaurar el rol
+
+Vuelve a conectarte como administrador y ejecuta:
+
+```javascript
+use curso_seguridad
+db.grantRolesToUser(
+  "lectorlab",
+  [{role: "read", db: "curso_seguridad"}]
+)
+```
+
+Ahora abre de nuevo la sesión del lector y repite `findOne`. Debería permitirse la lectura.
+
+### Qué demuestra
+
+Una autorización no es una cualidad permanente de la contraseña. Los permisos efectivos pueden cambiar sin cambiar la identidad de la cuenta.
+
+**Si algo falla:** confirma qué sesión es administrativa, qué roles tenía el usuario y si la sesión lectora se ha reconectado. No abandones la actividad antes de devolver los permisos al estado previsto para las demás prácticas.
+
+---
+
+## 19. Una base distinta no debe heredarse por accidente
+
+Una cuenta `read` sobre `curso_seguridad` no se convierte en un lector universal de cualquier base por haber iniciado sesión correctamente.
+
+### Paso 1. Abrir como lector
+
+Conecta como `lectorlab` utilizando `--authenticationDatabase curso_seguridad`.
+
+### Paso 2. Leer dentro de su ámbito
+
+```javascript
+use curso_seguridad
+db.secretos.findOne({_id: "demo-1"})
+```
+
+Este acceso debe estar permitido.
+
+### Paso 3. Cambiar de base lógica
+
+```javascript
+use curso_indices
+db.ventas.findOne()
+```
+
+Estamos conectados al **servidor de seguridad**, no a la instancia de índices. Puede que la colección ni exista allí. No interpretes un resultado `null` como demostración completa de aislamiento: para verificar permisos se necesita una operación y un recurso preparados.
+
+### Paso 4. Interpretación correcta
+
+La cuenta tiene roles asociados a una base. El alcance de `read` no se amplía automáticamente cuando ejecutamos `use otra_base`. Un diagnóstico riguroso diferencia la ausencia de datos de una denegación de autorización.
+
+**Lo que hemos aprendido:** base de autenticación, base seleccionada y ámbito de los roles son tres dimensiones relacionadas pero no idénticas.
+
+---
+
+## 20. La cadena de conexión: leerla sin dejar credenciales visibles
+
+Las aplicaciones utilizan a menudo URI de conexión. No es necesario que un principiante las memorice, pero sí debe reconocer sus componentes.
+
+### Primera lectura
+
+```text
+mongodb://localhost:27018/?authSource=admin
+```
+
+Se trata de un servidor en el equipo local, puerto 27018, y se indica que la autenticación se realizará contra la base `admin`.
+
+### Segundo ejemplo
+
+```text
+mongodb://localhost:27018/curso_seguridad?authSource=curso_seguridad
+```
+
+Aquí el contexto inicial y el ámbito de autenticación se refieren a `curso_seguridad`, como ocurre con el lector docente.
+
+### Qué no vamos a escribir en el libro
+
+No añadiremos al texto una contraseña permanente como parte de la URI. Una contraseña puede terminar copiada al historial de terminal, una captura o un repositorio público.
+
+### Pregunta de comprensión
+
+¿Cambiar `authSource` concede permisos sobre una colección? No. Solo cambia el lugar donde se comprueba la identidad. La autorización sigue dependiendo de los roles y del recurso al que se intenta acceder.
+
+### Diagnóstico de un error frecuente
+
+Si las credenciales son correctas pero MongoDB rechaza el login, revisa usuario, contraseña y `authSource`. No cambies primero los roles: quizá el problema ocurre antes de evaluar permisos.
+
+---
+
+## 21. Inspeccionar certificados sin asumir que están bien
+
+Un archivo con extensión `.crt` no garantiza que se trate de un certificado válido para tu servidor. Antes de usarlo debemos conocer su sujeto, emisor y fechas.
+
+### Paso 1. Generar los certificados de laboratorio
+
+Desde una terminal Bash con OpenSSL:
+
+```bash
+bash scripts/generar-certificados.sh
+```
+
+### Paso 2. Leer el servidor
+
+```bash
+openssl x509 -in certs/server.crt -noout -subject -issuer -dates
+```
+
+Identifica:
+
+- `subject`: identidad a la que se refiere el certificado.
+- `issuer`: quién lo emitió.
+- `notBefore` y `notAfter`: intervalo de validez.
+
+### Paso 3. Leer el cliente
+
+```bash
+openssl x509 -in certs/client.crt -noout -subject -issuer -dates
+```
+
+Compara los sujetos. El servidor y el alumno tienen propósitos distintos: presentar un certificado de servidor no equivale a identificarse como el alumno X.509.
+
+### Paso 4. Verificar la CA
+
+```bash
+openssl verify -CAfile certs/ca.crt certs/server.crt certs/client.crt
+```
+
+La validación de firmas es una pieza de la confianza; el servidor necesitará además disponer de la configuración TLS y de una cuenta adecuada para X.509.
+
+---
+
+## 22. Un nombre de servidor no es decorativo en TLS
+
+Una conexión TLS debe proteger el canal y permitir validar a qué servidor creemos conectarnos. El nombre del host y las identidades admitidas por el certificado deben corresponderse.
+
+### Paso 1. Usar el nombre preparado
+
+Desde la terminal:
+
+```bash
+docker compose exec mongo-tls mongosh --host localhost --tls --tlsCAFile /certs/ca.crt
+```
+
+El certificado de laboratorio incluye `localhost` como identidad permitida. Si todos los archivos son recientes y correctos, esperamos poder conectar.
+
+### Paso 2. Estudiar el problema del nombre equivocado
+
+Imagina que el certificado solo contemplase `mongodb.interno.example`, pero el cliente intentase conectar a `otro-servidor.example`. El cliente no debería tratar ambas identidades como equivalentes sin verificación.
+
+No necesitas configurar dominios externos para entender el problema. Lo importante es la pregunta que hace el cliente: **¿este certificado corresponde realmente al servidor que he solicitado?**
+
+### Paso 3. Rechazar la falsa solución
+
+Algunos errores se «arreglan» con opciones que omiten validación de certificados. No las utilices: el objetivo es aprender a identificar un error de confianza, no evitarlo sin comprender las consecuencias.
+
+### Conclusión
+
+Cifrar sin verificar adecuadamente a quién pertenece la otra parte puede proteger menos de lo que aparenta. La validación del nombre y de la cadena de confianza es parte esencial de la protección del canal.
+
+---
+
+## 23. TLS válido, usuario no autorizado: dos comprobaciones distintas
+
+Volvamos al servidor `mongo-tls` después de generar certificados.
+
+### Conectar con canal protegido
+
+```bash
+docker compose exec mongo-tls mongosh --host localhost --tls --tlsCAFile /certs/ca.crt
+```
+
+Dentro de `mongosh`:
+
+```javascript
+db.adminCommand({ping: 1})
+```
+
+Podrías obtener `ok:1`. Esto significa que el servidor responde sobre el canal protegido.
+
+### Intentar acceder a datos protegidos
+
+```javascript
+use curso_cert
+db.pruebas.findOne({_id: 1})
+```
+
+Si el servidor exige autorización y no has presentado una identidad admitida, la lectura debe rechazarse. **No es una contradicción**: el canal puede estar correctamente protegido aunque no poseas un rol de lectura.
+
+### Registrar dos evidencias
+
+Anota la conexión TLS válida y la consulta denegada. Una prueba no sustituye a la otra.
+
+### Qué aprenderías con el certificado del alumno
+
+Cuando X.509 identifica al cliente y MongoDB le asigna un rol `read`, esa misma lectura puede permitirse. Todavía debe rechazarse una inserción, porque el certificado no regala permisos de escritura.
+
+---
+
+## 24. Reconocer la identidad X.509 y su ámbito
+
+La cuenta X.509 de laboratorio se asocia a un sujeto de certificado como:
+
+```text
+CN=alumno-x509,OU=Alumnos,O=MongoDBFormacion
+```
+
+La identidad no es una palabra arbitraria que escribamos al conectarnos; debe corresponder al certificado presentado y al usuario que MongoDB tiene registrado en `$external`.
+
+### Paso 1. Reproducir la preparación integrada
+
+Desde Bash en la carpeta del proyecto, con certificados ya generados:
+
+```bash
+set -a
+. ./.env
+set +a
+bash scripts/probar-seguridad.sh
+```
+
+Observa los mensajes relacionados con X.509.
+
+### Paso 2. Comprobar las dos acciones
+
+El script debe verificar que la cuenta X.509 puede leer `curso_cert.pruebas` y que se le deniega escribir en ella.
+
+### Paso 3. Explicar lo ocurrido
+
+No digas simplemente «los certificados funcionan». Di que **un cliente presentó un certificado reconocido, obtuvo una identidad y quedó sujeto a roles de autorización**, igual que sucede con un usuario SCRAM.
+
+### Si falla
+
+Revisa primero certificados, CA y estado del contenedor. Después investiga el formato del sujeto registrado. No cambies a `root` la identidad X.509 para evitar estudiar el problema.
+
+---
+
+## 25. Un intento de escritura fallido NO tiene una sola causa
+
+Dos mensajes de error pueden parecer parecidos, pero originarse en lugares diferentes.
+
+### Caso A: contraseña equivocada
+
+El cliente no puede demostrar su identidad. El servidor no llega a tratarlo como el lector previsto.
+
+### Caso B: rol de solo lectura
+
+El cliente ya se ha autenticado como `lectorlab`, pero intenta un `insertOne` que su rol no autoriza.
+
+### Caso C: TLS obligatorio
+
+La conexión ni siquiera cumple la política de protección del canal. El rechazo ocurre antes de una operación normal de lectura o escritura.
+
+### Ejercicio de diagnóstico
+
+Clasifica cada mensaje conceptual:
+
+1. «Authentication failed» durante el login.
+2. «not authorized» después de entrar como lector e intentar insertar.
+3. Error al establecer un canal con un servidor que exige TLS.
+
+**Solución:** el primero apunta a autenticación; el segundo a autorización; el tercero al canal de comunicación. Para diagnosticar un caso concreto hay que revisar el comando, el contexto y los logs, no solo buscar una palabra conocida.
+
+### Por qué importa
+
+La reacción equivocada sería desactivar la seguridad para que los errores desaparezcan. El objetivo de la seguridad es precisamente bloquear algunas operaciones.
+
+---
+
+## 26. Revisar logs sin publicar contraseñas
+
+Los registros de Docker ayudan a explicar un servidor que no arranca o una conexión fallida. No sustituyen una auditoría formal completa.
+
+### Paso 1. Consultar un fragmento limitado
+
+En la terminal:
+
+```bash
+docker compose logs --tail=40 mongo-seguridad
+```
+
+Observa la fecha, el servicio y el mensaje relevante. No pegues todo el log en un documento que también contenga contraseñas privadas.
+
+### Paso 2. Distinguir tres clases de problemas
+
+- Un **fallo de arranque** se detecta en el ciclo del contenedor o en el proceso de MongoDB.
+- Un **fallo de autenticación** ocurre cuando las credenciales no permiten demostrar identidad.
+- Un **rechazo de autorización** puede ser el comportamiento correcto del rol, no una avería del servidor.
+
+### Paso 3. Hacer una anotación útil
+
+Escribe: «El servicio estaba sano, el cliente se conectó como lector y la escritura se rechazó por permisos». Esto enseña más que copiar cincuenta líneas sin explicar qué ocurrió.
+
+### Precaución
+
+Los mensajes de diagnóstico pueden incluir datos sensibles según el sistema y sus opciones. Antes de compartirlos, revisa que no contengan secretos ni información privada. La práctica utiliza datos ficticios, pero debemos aprender hábitos válidos para producción.
+
+---
+
+## 27. Actividad final: preparar una política mínima para la librería
+
+La librería tiene tres procesos:
+
+- Pantalla de atención: consulta ventas.
+- Servicio de pedidos: registra ventas nuevas.
+- Mantenimiento: administra usuarios y configuración.
+
+### Primera tarea. Proponer identidades
+
+Asigna a cada proceso una identidad diferente. Explica por qué no deben compartir la cuenta administradora.
+
+### Segunda tarea. Proponer permisos
+
+La pantalla de atención necesita `read` sobre los datos que consulta. El servicio de pedidos quizá necesite `readWrite` sobre ciertas colecciones. El mantenimiento requiere funciones administrativas más amplias, pero debe quedar fuera del tráfico ordinario de la aplicación.
+
+### Tercera tarea. Proponer protección de canal
+
+Si los clientes se conectan por una red no confiable, explica por qué se necesita TLS. Una contraseña SCRAM sin una política correcta de comunicación no resuelve todas las amenazas.
+
+### Cuarta tarea. Proponer comprobaciones
+
+Diseña una prueba que debe funcionar y otra que debe fallar para cada identidad. Por ejemplo, la pantalla de atención debe leer y no debe borrar.
+
+### Quinta tarea. Explicar límites
+
+¿Un rol `read` protege automáticamente un disco robado? No. ¿Un certificado X.509 impide por sí solo que un usuario escriba? No. ¿LDAP de Enterprise puede simularse activando una opción Community inexistente? No.
+
+### Entrega
+
+Elabora una tabla de **identidad, recurso, operación permitida, operación prohibida y evidencia esperada**. Esa tabla demuestra que comprendes la seguridad como decisiones observables y no como una acumulación de comandos.
+
+---
+
 ## Guía de resolución de errores
 
 **«docker: command not found».** Docker no está instalado o la terminal no lo encuentra.
