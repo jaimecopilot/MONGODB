@@ -895,3 +895,64 @@ No asumas que toda aplicación en producción refresca inmediatamente cada sesi�
 ### Conclusión de la unidad
 
 Una política de mínimo privilegio no se demuestra mostrando una tabla de roles ideal. Se demuestra con identidades concretas, recursos concretos, acciones permitidas y acciones rechazadas, y con un proceso para revisar los permisos cuando cambian las necesidades.
+
+
+---
+
+# Unidad 16 — Los puertos y nombres de Docker: conectarse al servidor correcto
+
+## 16.1. Un error de red puede parecer un error de autenticación
+
+El archivo `compose.yaml` configura varias instancias de MongoDB. Dentro de cada contenedor, el proceso `mongod` escucha normalmente en su puerto interno. Desde el ordenador anfitrión utilizamos puertos publicados distintos para no provocar colisiones.
+
+| Instancia | Acceso desde el anfitrión | Servicio de Docker |
+|---|---|---|
+| Índices | `127.0.0.1:27017` | `mongo-indices` |
+| Seguridad | `127.0.0.1:27018` | `mongo-seguridad` |
+| TLS | `127.0.0.1:27019` | `mongo-tls` |
+
+Esta tabla explica dos perspectivas de conexión: la del ordenador que ejecuta Docker y la del entorno interno del contenedor. **No significa que las tres instancias compartan usuarios o bases de datos**. Son procesos MongoDB separados.
+
+Si conectas accidentalmente al puerto 27017 cuando pretendías ensayar SCRAM en `mongo-seguridad`, podrías obtener respuestas inesperadas y llegar a conclusiones erróneas sobre los permisos. La primera pregunta diagnóstica debe ser «¿a qué servidor me he conectado realmente?».
+
+## 16.2. Localhost no es una identidad universal
+
+`localhost` se refiere al equipo o entorno de red desde el que se interpreta la conexión. Dentro de un contenedor significa algo diferente que dentro del host.
+
+Por eso nuestros scripts Docker usan nombres y rutas internas adecuados. Cuando ejecutamos `docker compose exec mongo-tls mongosh --host localhost`, esa instrucción corre **dentro del contenedor** y alcanza su propio proceso MongoDB.
+
+En cambio, una herramienta instalada en Windows que se conecte al servicio TLS publicado utilizaría, en este laboratorio, el puerto del anfitrión 27019 y las opciones de TLS adecuadas.
+
+La distinción evita mezclar:
+- nombre del servicio Docker;
+- nombre usado por el cliente;
+- puerto interno de MongoDB;
+- puerto publicado en el ordenador;
+- nombres declarados en el certificado del servidor.
+
+## 16.3. Una conexión segura necesita acertar en varias capas
+
+Para conectarte correctamente al servicio TLS deben coincidir:
+1. La instancia y el puerto.
+2. El uso de TLS, si el servidor lo exige.
+3. La autoridad que verifica el certificado.
+4. El nombre o dirección esperados en el certificado.
+5. El mecanismo de autenticación del cliente.
+6. La cuenta y los roles necesarios para la operación.
+
+Puedes superar los cuatro primeros puntos y fallar en autorización de escritura. **Eso no significa que el canal TLS haya dejado de funcionar**: cada capa responde una pregunta diferente.
+
+## 16.4. Regla de diagnóstico
+
+Antes de cambiar contraseñas, comprueba dónde estás:
+- ¿Has ejecutado `mongosh` dentro del servicio correcto?
+- ¿Has identificado la base de datos de autenticación?
+- ¿Exige ese servicio TLS?
+- ¿Se ha verificado el certificado?
+- ¿Qué identidad y roles se aplican a la operación?
+
+En un laboratorio con tres instancias, estas comprobaciones evitan muchos errores que podrían parecer problemas complejos de seguridad.
+
+### Ejercicio razonado
+
+Una persona ejecuta un comando `mongosh` contra el servidor de índices sin autenticación y concluye que las credenciales de seguridad «no sirven». Explica por qué la prueba no demuestra nada sobre `mongo-seguridad`. Una evaluación rigurosa debe realizarse en la instancia adecuada y sobre una operación protegida.
