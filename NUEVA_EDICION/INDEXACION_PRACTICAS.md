@@ -1122,6 +1122,463 @@ Que existan cinco resultados no implica que todas las ventas se produzcan a meno
 
 ---
 
+## 21. Partial index: incluir solo ventas pendientes
+
+Una oficina gestiona las ventas con estado `"pendiente"`. Puede querer un índice que incluya fechas de esas ventas, pero no mantener entradas del mismo índice para los pedidos pagados de hace años.
+
+### Preparar el índice
+
+Dentro de `mongosh`:
+
+```javascript
+use curso_indices
+db.ventas.createIndex(
+  {fecha: -1},
+  {
+    name: "ix_pendientes_fecha",
+    partialFilterExpression: {estado: "pendiente"}
+  }
+)
+```
+
+**Lee la decisión:** la clave del índice es `fecha`. La condición `partialFilterExpression` limita qué documentos entran en él. No es una condición que se aplique automáticamente a todas las consultas de la aplicación.
+
+### Consulta compatible con la selección
+
+```javascript
+db.ventas.find({estado: "pendiente"})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("executionStats")
+```
+
+El planificador puede considerar este índice porque la consulta solicita exactamente el subconjunto que el índice contiene.
+
+### Consulta que no puede perder resultados
+
+```javascript
+db.ventas.find({})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("executionStats")
+```
+
+Ahora pedimos ventas de **todos** los estados. Si MongoDB solo consultara el índice parcial, omitiría pagadas y enviadas. Por eso el plan no puede utilizar esa estructura como si representara toda la colección.
+
+### Razona antes de continuar
+
+Si mañana una venta pasa de pendiente a pagada, ¿por qué debe actualizarse el índice parcial? Porque ya no pertenece al subconjunto indexado. El índice ahorra espacio respecto a indexar todas las fechas, pero no está libre de mantenimiento.
+
+---
+
+## 22. Distinguir nombres, claves y opciones del índice
+
+Cuando enseñamos `createIndex`, es fácil pensar que el nombre visible es el índice completo. No lo es. El diseño incluye claves, orden y opciones.
+
+### Inspección
+
+```javascript
+db.ventas.getIndexes()
+```
+
+Localiza el índice `ix_numero`, el compuesto de cliente y fecha y el índice de texto. Para cada uno identifica:
+
+- `name`: nombre usado para referirnos a él.
+- `key`: campos y dirección o tipo de índice.
+- Opciones como `unique`, `partialFilterExpression` o `expireAfterSeconds`.
+
+### Experimento de consistencia
+
+Intenta describir este diseño sin utilizar su nombre:
+
+```javascript
+{clienteId: 1, fecha: -1}
+```
+
+Una descripción correcta sería: «primero organiza por cliente ascendente y, dentro de cada cliente, por fecha descendente». No basta decir «índice de cliente».
+
+### La trampa del nombre
+
+Podríamos poner a un índice el nombre `"indice_rapido"` y seguiría sin ser necesariamente rápido. El nombre es un identificador administrativo, **no una propiedad de rendimiento**.
+
+### ¿Cómo se relaciona con el laboratorio?
+
+Si una operación con `hint("ix_cliente_fecha")` falla porque no encuentra ese índice, comprueba su nombre real en `getIndexes()`. Evita copiar nombres de otros ejercicios sin inspeccionar primero el estado de tu colección.
+
+---
+
+## 23. Índice único compuesto: una regla de negocio con dos campos
+
+Puede que una tienda numere sus facturas a partir del 1 cada nuevo año. Si el número se repite en años diferentes, imponer `unique` únicamente sobre `numero` sería incorrecto. La regla auténtica podría ser: *dentro de un mismo año, el número no se repite*.
+
+Vamos a construir una colección independiente para no alterar las ventas del curso.
+
+### Paso 1. Reiniciar solo la colección de prueba
+
+```javascript
+use curso_indices
+db.facturas_demo.drop()
+db.facturas_demo.createIndex(
+  {anio: 1, numero: 1},
+  {unique: true, name: "ix_factura_anio_numero"}
+)
+```
+
+### Paso 2. Insertar dos facturas válidas
+
+```javascript
+db.facturas_demo.insertMany([
+  {anio: 2025, numero: 101, cliente: "A"},
+  {anio: 2026, numero: 101, cliente: "B"}
+])
+```
+
+La operación debe ser aceptada: aunque se repite el número, cambia el año. La clave **compuesta** es diferente.
+
+### Paso 3. Intentar repetir la combinación
+
+```javascript
+db.facturas_demo.insertOne({
+  anio: 2025, numero: 101, cliente: "C"
+})
+```
+
+Esperamos un error de duplicado `E11000`. Comprueba:
+
+```javascript
+db.facturas_demo.countDocuments({})
+```
+
+Debe mostrar 2.
+
+**Qué has aprendido:** una restricción de unicidad se aplica a la clave definida, que puede contener más de un campo. En sistemas reales, la clave única debe expresar fielmente la regla de negocio.
+
+---
+
+## 24. TTL con una fecha límite: interpretar el tiempo sin confundir unidades
+
+Ya vimos cómo caduca un documento. Ahora comprobaremos por qué almacenar un campo como fecha real es distinto de almacenar su representación como texto.
+
+### Dos documentos de prueba
+
+```javascript
+use curso_indices
+db.caducidad_demo.drop()
+db.caducidad_demo.createIndex(
+  {vence: 1},
+  {expireAfterSeconds: 0}
+)
+
+db.caducidad_demo.insertMany([
+  {_id: "fecha", vence: new Date(Date.now() - 60000)},
+  {_id: "texto", vence: "2020-01-01"}
+])
+```
+
+El primero contiene una fecha vencida. El segundo contiene un texto que **se parece** a una fecha, pero no tiene el tipo adecuado para la política TTL.
+
+### Observación
+
+```javascript
+db.caducidad_demo.find()
+```
+
+Al actuar el monitor TTL, el documento con `vence` de tipo fecha puede desaparecer. El de texto no debe considerarse una fecha válida simplemente por su apariencia.
+
+### El peligro de diseñar una regla de seguridad con TTL
+
+Aunque la eliminación funcione, puede tener retraso. Una aplicación que permita acceso hasta que desaparezca físicamente un documento podría mantener activa una sesión ya caducada durante cierto intervalo.
+
+**Conclusión obligatoria:** el monitor TTL facilita la limpieza de datos; las reglas de autorización y caducidad lógica deben evaluarse por separado cuando la seguridad lo requiera.
+
+---
+
+## 25. Ocultar un índice: experimentar sin destruirlo
+
+Imagina que hemos mantenido un índice durante meses pero creemos que ya no se usa. En lugar de eliminarlo de inmediato, MongoDB permite hacerlo invisible al planificador.
+
+### Preparar un índice que sabemos que existe
+
+```javascript
+use curso_indices
+db.ventas.createIndex(
+  {clienteId: 1, fecha: -1},
+  {name: "ix_cliente_fecha"}
+)
+```
+
+### Observar el plan normal
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("executionStats")
+```
+
+Anota el índice escogido si aparece en el plan.
+
+### Ocultarlo y repetir
+
+```javascript
+db.ventas.hideIndex("ix_cliente_fecha")
+```
+
+Repite la misma consulta y observa si MongoDB utiliza otro índice o cambia el trabajo realizado. **El resultado puede depender de los índices alternativos que tengas.**
+
+### Restaurar siempre
+
+```javascript
+db.ventas.unhideIndex("ix_cliente_fecha")
+```
+
+**Comprueba:** `getIndexes()` te permite observar el estado del índice. No abandones este laboratorio con un índice oculto accidentalmente.
+
+### Interpretación
+
+El índice oculto sigue ocupando espacio y sigue manteniéndose con las escrituras. Ocultarlo no equivale a borrarlo. Tampoco puede forzarse un índice oculto mediante `hint`. Esta técnica ayuda a investigar el efecto de una posible retirada.
+
+---
+
+## 26. $indexStats: observar uso, no adivinar popularidad
+
+Un índice puede haber sido creado por una tarea que se ejecuta solo una vez al mes. ¿Qué ocurre si estudiamos su uso durante los diez minutos de clase? Tal vez aparezca sin accesos, pero eso no demostraría que sea innecesario.
+
+### Consultar los contadores
+
+```javascript
+use curso_indices
+db.ventas.aggregate([{$indexStats: {}}])
+```
+
+Cada fila resume información de un índice y sus accesos observados en el nodo. Los campos pueden incluir nombre y estadísticas de acceso.
+
+### Generar una consulta de prueba
+
+```javascript
+db.ventas.find({numero: 199998}).limit(1).toArray()
+```
+
+Vuelve a ejecutar `$indexStats` y busca el índice sobre `numero`. Puede reflejar actividad, dependiendo del plan y de las características del servidor.
+
+### Lo que no debemos afirmar
+
+Un contador de cero **no prueba** que el índice carezca de valor para la aplicación. La consulta de negocio puede no haberse ejecutado en la ventana de observación; también pueden existir varias instancias o cambios que reinicien contadores.
+
+### Ejercicio de criterio profesional
+
+Elabora una recomendación de dos frases: «Antes de eliminar este índice necesitamos observar... y comprobar...». Una buena respuesta menciona el periodo real de uso, las consultas que lo emplean y el efecto esperado sobre escrituras y lecturas.
+
+---
+
+## 27. Tamaño de índices: no confundir documentos con estructuras auxiliares
+
+Una tienda puede almacenar cientos de miles de ventas y varios índices. Necesitamos separar cuánto ocupan los documentos y cuánto ocupan las estructuras de acceso.
+
+### Consultar estadísticas
+
+```javascript
+use curso_indices
+db.ventas.stats()
+```
+
+La salida puede incluir campos como `count`, `size`, `storageSize`, `totalIndexSize` e `indexSizes`. Las cifras exactas dependen de la compresión y de las características del motor.
+
+### Interpretar una tabla
+
+Anota:
+
+| Dato | ¿Qué representa? |
+|---|---|
+| `count` | Documentos de la colección |
+| `size` | Tamaño lógico aproximado de los datos |
+| `storageSize` | Espacio de almacenamiento asociado a la colección |
+| `totalIndexSize` | Espacio total de los índices |
+| `indexSizes` | Desglose por índice |
+
+### Relacionar tamaño con el diseño
+
+Un índice con muchas claves o que indexa arrays puede tener costes diferentes a uno pequeño sobre campos con pocos valores. Pero no es suficiente afirmar que «multikey siempre ocupa el doble». Hay que medir.
+
+**Pregunta:** si eliminas un índice que se usa para búsquedas importantes, ¿qué ganas y qué arriesgas? Puedes reducir recursos de mantenimiento y almacenamiento, pero empeorar consultas que dependían de él.
+
+---
+
+## 28. allPlansExecution: por qué no siempre gana el plan que imaginabas
+
+MongoDB puede considerar varias estrategias. El modo `executionStats` describe la ejecución del plan ganador, pero existe otro modo que aporta información sobre la evaluación de planes candidatos.
+
+### Ejecutar una consulta con candidatos
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("allPlansExecution")
+```
+
+Busca los apartados relacionados con el plan ganador y los planes considerados.
+
+### Cómo leer sin ahogarse en el JSON
+
+Empieza por comprobar cuántos resultados espera la consulta y qué índices existen. Solo después explora los planes candidatos. No trates todos los campos de la salida como si fueran imprescindibles para un principiante.
+
+### Qué no significa este modo
+
+No garantiza haber ejecutado completamente cada candidato hasta devolver todos los resultados: cierta información corresponde a la evaluación durante la selección. No confundas esas estadísticas parciales con las de una ejecución normal completa.
+
+### Ejercicio de comprensión
+
+¿Por qué un índice nuevo podría no ser elegido? Porque otro ya satisface mejor la consulta, porque el filtro es poco selectivo o por características concretas del plan. La presencia de un índice en `getIndexes()` no obliga al optimizador a utilizarlo.
+
+---
+
+## 29. Cambiar una sola variable: la base de un experimento válido
+
+En varias prácticas comparamos consultas antes y después de un índice. Vamos a comprobar por qué debemos conservar iguales las condiciones cuando queremos atribuir una diferencia a una causa.
+
+### Primera medición
+
+```javascript
+db.ventas.find({numero: 199998})
+  .explain("executionStats")
+```
+
+Anota `nReturned` y `totalDocsExamined`.
+
+### Segunda medición: un cambio deliberadamente incorrecto
+
+```javascript
+db.ventas.find({estado: "pagada"})
+  .explain("executionStats")
+```
+
+Es otra consulta, que puede devolver miles de documentos. Si comparas sus tiempos con los de la primera, no puedes concluir nada serio sobre el efecto del índice `numero`.
+
+### Tercera medición: volver a un experimento correcto
+
+Repite la primera consulta después de un cambio controlado en su índice, sin alterar el filtro ni los documentos de la colección. Solo entonces tendrás una comparación significativa del efecto de ese cambio.
+
+### Conclusión escrita
+
+«Una medición de rendimiento solo permite explicar diferencias si controlamos lo que cambia. Si modifico a la vez filtro, tamaño de colección e índices, no puedo atribuir la diferencia a uno de ellos».
+
+---
+
+## 30. Escritura e índices: qué tiene que mantener el servidor
+
+Un índice mejora determinadas búsquedas, pero también debe actualizarse al cambiar los documentos. Lo demostraremos con una colección aislada, sin millones de registros.
+
+### Crear la colección de ensayo
+
+```javascript
+use curso_indices
+db.escrituras_demo.drop()
+db.escrituras_demo.createIndex({codigo: 1})
+db.escrituras_demo.createIndex({categoria: 1, precio: 1})
+```
+
+### Insertar y actualizar
+
+```javascript
+db.escrituras_demo.insertOne({
+  codigo: "L-01", categoria: "libros", precio: 19.50
+})
+db.escrituras_demo.updateOne(
+  {codigo: "L-01"},
+  {$set: {precio: 24.50}}
+)
+db.escrituras_demo.findOne({codigo: "L-01"})
+```
+
+El documento cambia de precio. MongoDB debe mantener la correspondencia entre el dato nuevo y los índices afectados. Este experimento **no demuestra por sí solo una pérdida de velocidad medible**; muestra una obligación de consistencia.
+
+### Pregunta para razonar
+
+Si una colección se actualiza constantemente, ¿conviene agregar veinte índices que nadie consulta? Probablemente no. Cada índice adicional puede exigir mantenimiento sin aportar beneficio al patrón real de lecturas.
+
+---
+
+## 31. Diagnosticar un índice que aparentemente «no funciona»
+
+Un compañero afirma: «He creado un índice, pero la consulta sigue siendo lenta». Antes de borrar datos, sigue esta investigación.
+
+### Pregunta 1. ¿Cuál es la consulta exacta?
+
+Pide el filtro completo, la ordenación, la proyección y el límite. No sirve «busco por cliente».
+
+### Pregunta 2. ¿Existe el índice que afirma?
+
+```javascript
+db.ventas.getIndexes()
+```
+
+Verifica campos y orden. Un índice `{clienteId:1,fecha:-1}` no es un índice `{fecha:-1,clienteId:1}`.
+
+### Pregunta 3. ¿Cómo se ejecutó realmente?
+
+```javascript
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(5)
+  .explain("executionStats")
+```
+
+Localiza plan y contadores. No interpretes «tardó más» sin otros datos.
+
+### Pregunta 4. ¿Hay un problema de tipos o de selección?
+
+Comprueba el tipo del campo, la cardinalidad y la cantidad de resultados. Un índice sobre un campo que devuelve casi toda la colección puede no tener el efecto esperado.
+
+### Pregunta 5. ¿Qué hipótesis probaríamos después?
+
+Proponer un índice alternativo tiene sentido **después** de entender por qué el actual no cumple los requisitos. Si no sabes explicar el problema, aún no es momento de crear otro.
+
+---
+
+## 32. Caso integrador: la librería cambia sus pantallas
+
+El responsable de la librería plantea tres necesidades:
+
+- localizar una venta concreta por número;
+- mostrar las diez últimas ventas de un cliente;
+- buscar descripciones que mencionen una reclamación.
+
+### Preparación
+
+Trabaja sobre la colección `curso_indices.ventas`. Comprueba que contiene ventas, que conoces el tipo de `numero` y `fecha`, y que la colección no fue reiniciada accidentalmente.
+
+### Parte A. Proponer y justificar
+
+Escribe qué índice utilizarías para cada consulta. Debe haber tres explicaciones diferentes: igualdad muy selectiva, filtro y ordenación, búsqueda de términos.
+
+### Parte B. Ejecutar
+
+```javascript
+db.ventas.find({numero: 199998}).explain("executionStats")
+
+db.ventas.find({clienteId: 809})
+  .sort({fecha: -1})
+  .limit(10)
+  .explain("executionStats")
+
+db.ventas.find({$text: {$search: "reclamacion"}})
+  .limit(10)
+  .explain("executionStats")
+```
+
+### Parte C. Elaborar un pequeño informe técnico
+
+Para cada consulta, registra el resultado, el índice seleccionado, los documentos examinados y qué explicación ofrecerías a alguien que no conoce MongoDB. Si aparece un plan inesperado, documenta el hecho: no inventes resultados para que coincidan con tu hipótesis.
+
+### Parte D. Revisión crítica
+
+¿Podría un solo índice cubrir de manera óptima las tres consultas? No deberías dar por sentado que sí. Cada pregunta tiene un patrón diferente y la colección también necesita aceptar escrituras.
+
+**Criterio de éxito:** no es una captura de pantalla con todos los comandos en verde. Es ser capaz de demostrar que sabes formular la necesidad, escoger un índice candidato, observar el plan real e interpretar el coste.
+
+---
+
 ## Resolución de incidencias frecuentes
 
 **«docker: command not found».** No estás ejecutando Docker desde una terminal que tenga disponible el programa; revisa instalación y ruta.
