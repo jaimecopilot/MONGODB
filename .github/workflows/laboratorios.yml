@@ -3,6 +3,13 @@ on:
   push:
     branches: [main, laboratorio/github-actions, docs/auditoria-manuales]
   pull_request:
+    paths:
+      - "lab/**"
+      - "compose.yaml"
+      - ".env.example"
+      - "scripts/generar-certificados.sh"
+      - "scripts/probar-seguridad.sh"
+      - ".github/workflows/laboratorios.yml"
   workflow_dispatch:
 permissions:
   contents: read
