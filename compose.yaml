@@ -15,6 +15,8 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: adminlab
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ADMIN_PASSWORD:?Define MONGO_ADMIN_PASSWORD}
+      LAB_READER_PASSWORD: ${LAB_READER_PASSWORD:-lector-solo-lab}
+      LAB_WRITER_PASSWORD: ${LAB_WRITER_PASSWORD:-escritor-solo-lab}
     ports: ["127.0.0.1:27018:27017"]
     volumes: ["./lab:/lab:ro"]
     healthcheck:

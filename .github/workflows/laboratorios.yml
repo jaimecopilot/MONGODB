@@ -1,7 +1,7 @@
 name: Laboratorios MongoDB 8.0
 on:
   push:
-    branches: [main, laboratorio/github-actions]
+    branches: [main, laboratorio/github-actions, docs/auditoria-manuales]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -51,6 +51,54 @@ jobs:
       - name: Diagnostico
         if: failure()
         run: docker compose logs --tail=120 mongo-seguridad mongo-tls
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  recorrido_aula:
+    env:
+      MONGO_ADMIN_PASSWORD: "clave-temporal-ci-no-persistente"
+    name: "Recorrido de clase - datos sin indices"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Iniciar MongoDB
+        env:
+          MONGO_ADMIN_PASSWORD: laboratorio-desde-github-actions
+        run: docker compose up -d --wait mongo-indices
+      - name: Cargar 200000 ventas sin indices secundarios
+        run: docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file /lab/sembrar_ventas.js
+      - name: Probar progresion con explain e indices
+        run: docker compose exec -T mongo-indices mongosh --quiet --file /lab/comprobar_recorrido_aula.js
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
+      - name: Apagar
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  manuales:
+    env:
+      MONGO_ADMIN_PASSWORD: "clave-temporal-ci-no-persistente"
+    name: "Secuencia literal de scripts de indices del manual"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Arrancar MongoDB
+        env:
+          MONGO_ADMIN_PASSWORD: docente-efimero-sin-exposicion
+        run: docker compose up -d --wait mongo-indices
+      - name: Probar scripts docentes en orden
+        run: |
+          for script in 01_cargar_ventas 00_preflight 02_antes 03_crear_indices 04_despues 05_tipos 06_unique_ttl 07_ver_ttl 10_verificacion_indices 12_restaurar_indices; do
+            echo "=== $script ==="
+            docker compose exec -T -e VENTAS=200000 mongo-indices mongosh --quiet --file "/lab/$script.js"
+          done
+      - name: Diagnostico
+        if: failure()
+        run: docker compose logs --tail=120 mongo-indices
       - name: Apagar
         if: always()
         run: docker compose down --volumes --remove-orphans
