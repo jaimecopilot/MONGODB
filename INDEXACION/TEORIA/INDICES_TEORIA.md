@@ -1,4 +1,167 @@
 # Índices de MongoDB 8.0
+
+
+# Antes de estudiar índices: los datos y las consultas que vamos a optimizar
+
+## 0.1. Por qué hay que empezar por los documentos
+
+Un principiante puede copiar `createIndex` y conseguir que MongoDB responda «OK» sin haber aprendido nada. Para aprender índices primero necesitamos comprender qué estamos buscando, cómo expresamos esa búsqueda y qué significa un resultado correcto.
+
+MongoDB almacena **documentos**. Cada documento tiene campos y valores. Los documentos se reúnen en una **colección**, y las colecciones pertenecen a una **base de datos**. En este curso utilizaremos la base de datos `curso_indices`, cuya colección principal se llama `ventas`.
+
+Ejemplo de un documento:
+
+```javascript
+{
+  numero: 101,
+  clienteId: 809,
+  estado: "pagada",
+  fecha: ISODate("2025-01-12T00:00:00Z"),
+  importe: 72.50,
+  etiquetas: ["web", "urgente"]
+}
+```
+
+Antes de pensar en índices debemos reconocer que estos campos no son del mismo tipo:
+- `numero` y `clienteId` son valores numéricos.
+- `estado` es texto; las comillas indican una cadena.
+- `fecha` es una fecha representada en el shell mediante `ISODate`.
+- `importe` es un número decimal.
+- `etiquetas` es un array, es decir, una lista de valores.
+
+MongoDB utiliza un formato binario llamado **BSON** que permite almacenar tipos apropiados para documentos. La sintaxis que vemos en `mongosh` se parece a JavaScript, pero no debemos confundir una fecha con la cadena de texto que contiene sus caracteres.
+
+## 0.2. Una base de datos no es una pantalla de la aplicación
+
+Una tienda puede mostrar una tabla con diez ventas, pero la colección de MongoDB puede contener 200.000 documentos. La pantalla está mostrando una pequeña selección de los datos.
+
+Piensa en tres capas:
+1. **Datos almacenados:** las ventas existentes.
+2. **Consulta:** la petición concreta de una aplicación o de una persona.
+3. **Resultado:** los documentos que se entregan al cliente.
+
+Los índices influyen en la manera de obtener el resultado, **no cambian por sí solos lo que la aplicación ha pedido**.
+
+## 0.3. Cómo seleccionar la colección correcta
+
+En `mongosh` podemos establecer una referencia a la colección deseada:
+
+```javascript
+const ventas = db.getSiblingDB("curso_indices").ventas;
+```
+
+A partir de ahí `ventas.find(...)` y `ventas.countDocuments(...)` actuarán sobre esa colección. El nombre es importante. Si consultas una base distinta, podrías obtener cero documentos sin que exista ningún error de indexación.
+
+## 0.4. Buscar por igualdad
+
+```javascript
+ventas.find({ estado: "pagada" })
+```
+
+La orden se lee así: «de la colección de ventas, devuelve los documentos cuyo campo `estado` contiene exactamente el valor `pagada`».
+
+Es distinto de:
+
+```javascript
+ventas.find({ estado: "pendiente" })
+```
+
+Las dos consultas tienen la misma estructura, pero responden preguntas diferentes.
+
+**Pregunta de comprensión:** si una venta está pagada, ¿debería aparecer en una consulta por pendientes? Si respondes que sí porque contiene el campo `estado`, aún no has entendido el significado del filtro.
+
+## 0.5. Comparar valores: mayor, menor e igualdad
+
+Imagina cuatro ventas:
+- A: pagada, importe 720.
+- B: pagada, importe 200.
+- C: pendiente, importe 880.
+- D: cancelada, importe 80.
+
+La consulta:
+
+```javascript
+ventas.find({ importe: { $gt: 500 } })
+```
+
+selecciona ventas con importe superior a 500: A y C.
+
+La consulta:
+
+```javascript
+ventas.find({
+  estado:"pagada",
+  importe:{$gt:500}
+})
+```
+
+añade una segunda condición: solo A cumple simultáneamente el estado y el importe. Esto enseña algo previo a cualquier índice: **la lógica del filtro determina qué significa un resultado correcto**.
+
+Operadores que utilizarás:
+- `$gt`: mayor que.
+- `$gte`: mayor o igual.
+- `$lt`: menor que.
+- `$lte`: menor o igual.
+
+La diferencia entre `$gt:500` y `$gte:500` se nota exactamente en el valor 500. Un índice no corrige una desigualdad mal planteada.
+
+## 0.6. Ordenar no es filtrar
+
+```javascript
+ventas.find({estado:"pagada"}).sort({fecha:-1})
+```
+
+La condición `estado` determina qué documentos entran en el conjunto. `sort` establece en qué orden queremos verlos. El valor `-1` pide fecha descendente, es decir, los más recientes primero.
+
+Si solo necesitamos diez:
+
+```javascript
+ventas.find({estado:"pagada"})
+  .sort({fecha:-1})
+  .limit(10)
+```
+
+No confundas `limit(10)` con «el servidor solo examina diez documentos». Sin un acceso adecuado puede necesitar recorrer muchísimos candidatos antes de entregar diez.
+
+## 0.7. Elegir qué campos recibir: la proyección
+
+```javascript
+ventas.find(
+  {estado:"pagada"},
+  {_id:0,numero:1,importe:1}
+)
+```
+
+El primer objeto sigue siendo el filtro. El segundo indica la **proyección**: queremos ver `numero` e `importe`, pero no `_id`. Esa decisión importa cuando estudiemos consultas cubiertas, porque el índice debe contener lo necesario para responder sin buscar otros campos en cada documento.
+
+## 0.8. Leer frente a escribir
+
+Estas instrucciones hacen cosas radicalmente distintas:
+
+```javascript
+ventas.find({numero:101})
+ventas.insertOne({numero:101,estado:"pagada"})
+ventas.updateOne({numero:101},{$set:{estado:"enviada"}})
+ventas.deleteOne({numero:101})
+```
+
+La primera consulta; la segunda crea un documento; la tercera modifica uno; la cuarta intenta borrarlo. En las prácticas no se ejecutan comandos de modificación como entretenimiento: deben tener una finalidad concreta y utilizar datos ficticios.
+
+Al crear índices únicos, por ejemplo, una inserción duplicada puede ser rechazada. Ese fallo podría demostrar que la integridad está protegida.
+
+## 0.9. Tres preguntas obligatorias antes de utilizar explain
+
+1. ¿Cuál es **la pregunta de negocio** que resuelve la consulta?
+2. ¿El resultado es correcto: contiene los documentos esperados?
+3. ¿Qué trabajo realizó MongoDB para obtenerlo?
+
+La tercera cuestión es donde entra `explain`. Si las dos primeras no están claras, una tabla de `totalDocsExamined` no ayudará a aprender.
+
+### Comprobación inicial
+
+¿Por qué no son equivalentes «devuelve diez ventas» y «examina diez documentos»? ¿Por qué `sort` no implica la creación automática de un índice? ¿Cómo influye una proyección en lo que el cliente recibe?
+
+Si puedes responder estas tres preguntas, estás preparado para comenzar la primera unidad sobre índices.
 ## Unidad 1 — Encontrar una venta entre 200.000
 
 ### El problema, antes que el comando
