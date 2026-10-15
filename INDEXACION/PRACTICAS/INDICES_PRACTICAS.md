@@ -2056,3 +2056,204 @@ Un buscador corporativo puede necesitar corrección ortográfica, relevancia com
 ### Evaluación final
 
 Una persona pide «todas las descripciones que contienen los caracteres `bic` en cualquier posición». Otra pide «documentos relacionados con la palabra bicicleta». ¿Por qué no resolverías automáticamente ambas necesidades con idéntica consulta? Explica qué significa cada petición y cómo comprobarías los resultados.
+
+
+---
+
+# Laboratorio 17 — Índices y agregaciones: cuando la consulta se convierte en una secuencia de operaciones
+
+## Por qué no todas las consultas se escriben con find
+
+Hasta ahora hemos estudiado consultas con `find`, `sort` y `limit`. MongoDB también permite construir **pipelines de agregación**, que son secuencias de etapas por las que pasan los documentos.
+
+Un pipeline puede filtrar, ordenar, limitar, proyectar campos o realizar cálculos. Aprender índices implica saber reconocer cuándo una etapa inicial del pipeline puede beneficiarse de una estructura de acceso.
+
+Vamos a buscar las últimas diez ventas pagadas, pero esta vez expresaremos la operación mediante etapas de agregación para entender que **el índice se relaciona con los filtros y el orden requerido, no con el nombre de la función que escribe el alumno**.
+
+### Paso 1. Preparar el servidor
+
+Desde la terminal del ordenador:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de `mongosh` establece la referencia:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+```
+
+Comprobar que la colección contiene datos evita investigar planes sobre una base vacía:
+
+```javascript
+c.countDocuments({})
+```
+
+### Paso 2. Formular primero la consulta que ya conoces
+
+```javascript
+c.find({estado:"pagada"})
+ .sort({fecha:-1})
+ .limit(10)
+ .toArray()
+```
+
+Esta consulta filtra por estado, coloca las fechas más recientes primero y devuelve hasta diez resultados. Copia mentalmente su significado, no todos los documentos de salida.
+
+### Paso 3. Expresar lo mismo como pipeline
+
+```javascript
+c.aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10}
+]).toArray()
+```
+
+Cada etapa recibe documentos de la etapa anterior:
+- `$match` descarta las ventas que no están pagadas.
+- `$sort` determina el orden por fecha.
+- `$limit` limita el número final de documentos.
+
+El resultado expresa la misma necesidad general, pero recuerda que **las fechas iguales pueden producir empates**. Dos planes sin criterio secundario de orden total pueden seleccionar diferentes documentos empatados en el límite.
+
+### Paso 4. Consultar el plan de agregación
+
+```javascript
+c.explain("executionStats").aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10}
+])
+```
+
+La salida puede contener varias estructuras y etapas. No esperes que el JSON sea idéntico al de `find().explain()`. Busca información sobre el acceso inicial a la colección, los índices elegidos y la posible ordenación.
+
+### Paso 5. Reconocer por qué importa colocar el filtro pronto
+
+Imagina un pipeline que primero prepara miles de resultados y después decide que solo necesita un estado. Puede trabajar más de lo necesario. MongoDB posee optimizaciones del pipeline que pueden reorganizar operaciones cuando la semántica lo permite, pero **no debemos confiar ciegamente en que cualquier secuencia mal planteada será óptima**.
+
+Explica por qué filtrar por `estado` antes de generar una gran salida suele ser una buena idea conceptual. Después revisa el plan real para ver cómo resolvió MongoDB la consulta.
+
+### Paso 6. Añadir una proyección
+
+```javascript
+c.aggregate([
+  {$match:{estado:"pagada"}},
+  {$sort:{fecha:-1}},
+  {$limit:10},
+  {$project:{_id:0,numero:1,fecha:1,importe:1}}
+]).toArray()
+```
+
+`$project` escoge los campos del resultado. Hemos decidido no mostrar detalles innecesarios. Eso **no significa automáticamente** que la consulta sea cubierta: necesitaríamos comprobar si el índice contiene todos los datos que exige la ejecución.
+
+### Paso 7. Relacionarlo con el índice compuesto
+
+Si existe el índice `{estado:1,fecha:-1,importe:1}` creado en la primera práctica, MongoDB dispone de un acceso potencialmente útil para filtrar por estado y recorrer fechas ordenadas.
+
+No crees un índice adicional solo porque cambiaste `find` por `aggregate`. La pregunta de negocio es esencialmente la misma.
+
+### Actividad
+
+Explica la diferencia entre estos tres conceptos:
+1. `$match` decide qué documentos cumplen una condición.
+2. `$sort` establece un orden.
+3. `$project` decide qué campos aparecen en el resultado.
+
+Indica cuál sería un índice candidato para una pantalla que filtra por estado y ordena por fecha, y qué comprobarías mediante `explain` antes de afirmar que ayuda.
+
+---
+
+# Laboratorio 18 — Un error lógico dentro de arrays puede producir resultados falsos
+
+## La situación
+
+Una venta puede contener varios productos. La empresa quiere buscar ventas que incluyan un producto de determinado SKU con una cantidad mínima.
+
+Ejemplo:
+
+```javascript
+{
+  productos:[
+    {sku:"SKU10",cantidad:1},
+    {sku:"SKU20",cantidad:3}
+  ]
+}
+```
+
+Una consulta que verifica `sku:"SKU10"` y `cantidad:3` por separado sobre elementos del array puede encontrar el documento, aunque **el producto SKU10 tenga solo cantidad uno**. Esto es un error de formulación de la pregunta, no de indexación.
+
+### Paso 1. Crear una colección de prueba
+
+En `mongosh`:
+
+```javascript
+const d = db.getSiblingDB("curso_indices");
+d.productos_pedidos_clase.drop();
+d.productos_pedidos_clase.insertMany([
+  {_id:1,productos:[{sku:"SKU10",cantidad:1},{sku:"SKU20",cantidad:3}]},
+  {_id:2,productos:[{sku:"SKU10",cantidad:3}]},
+  {_id:3,productos:[{sku:"SKU30",cantidad:3}]}
+]);
+```
+
+La colección es pequeña para que podamos predecir manualmente el resultado. La venta uno no debe satisfacer la exigencia de **SKU10 con cantidad tres**, pero la venta dos sí.
+
+### Paso 2. Ensayar una consulta ambigua
+
+```javascript
+d.productos_pedidos_clase.find({
+  "productos.sku":"SKU10",
+  "productos.cantidad":3
+}).toArray()
+```
+
+¿Qué documentos aparecen? Observa que puede encontrarse tanto la venta uno como la dos, porque los predicados se satisfacen en elementos que no necesariamente son el mismo.
+
+### Paso 3. Exigir coincidencia dentro del mismo elemento
+
+```javascript
+d.productos_pedidos_clase.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).toArray()
+```
+
+**Resultado esperado:** solo el documento dos. `$elemMatch` obliga a aplicar las condiciones dentro de un mismo elemento del array.
+
+### Paso 4. Estudiar un índice que involucre campos del array
+
+```javascript
+d.productos_pedidos_clase.createIndex(
+  {"productos.sku":1,"productos.cantidad":1},
+  {name:"ix_productos_sku_cantidad"}
+)
+```
+
+En este modelo ambos campos están dentro del **mismo array de subdocumentos**, no en dos arrays paralelos independientes. MongoDB puede construir un índice compuesto multikey apropiado sujeto a las restricciones del modelo.
+
+### Paso 5. Leer el plan correcto
+
+```javascript
+d.productos_pedidos_clase.find({
+  productos:{$elemMatch:{sku:"SKU10",cantidad:3}}
+}).explain("executionStats")
+```
+
+Busca si utiliza el índice, cuántos documentos encuentra y cuántas entradas examina. No te obsesiones por medir milisegundos sobre tres documentos: la lección importante es **formular correctamente las condiciones y entender las restricciones de un array**.
+
+### Paso 6. Entender la limitación
+
+MongoDB no permite indiscriminadamente índices compuestos sobre varios campos que contienen **arrays independientes** en un mismo documento. La restricción evita combinaciones de claves difíciles de manejar y debe tenerse en cuenta en el diseño de esquemas.
+
+Si tu aplicación necesita indexar muchas relaciones complejas, quizá debas reconsiderar la estructura de documentos, no añadir índices cada vez más complicados sin conocer sus reglas.
+
+### Evaluación
+
+1. ¿Por qué la primera consulta puede encontrar el documento uno?
+2. ¿Qué condición adicional expresa `$elemMatch`?
+3. ¿Por qué indexar una consulta incorrecta no arregla su significado?
+4. ¿Por qué un multikey puede examinar más claves que documentos?
+5. ¿Qué comprobarías antes de crear un índice compuesto que involucre varios arrays?
