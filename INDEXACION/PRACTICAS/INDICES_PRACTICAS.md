@@ -2527,3 +2527,111 @@ d.duplicados_clase.createIndex(
 ### Evaluación final
 
 Describe la diferencia entre el error de construir un índice unique sobre datos ya duplicados y el error de insertar un duplicado cuando el índice ya existe. ¿Qué protege MongoDB en cada caso?
+
+
+---
+
+# Laboratorio 22 — Un índice puede ser correcto y aun así ayudar poco a una consulta
+
+## El problema
+
+Has comprobado que buscar un número de venta por igualdad puede pasar de examinar muchísimos documentos a uno solo. Ahora la empresa pregunta «¿cuáles son todas las ventas pagadas?».
+
+¿Podemos esperar el mismo resultado? No. `numero` distingue una venta de las demás, pero `estado` contiene solamente unos pocos valores y miles de documentos comparten cada uno.
+
+Esta práctica relaciona **cardinalidad, selectividad y número de resultados**.
+
+### Paso 1. Comprobar el tamaño de la colección
+
+Desde PowerShell o Bash:
+
+```bash
+docker compose up -d --wait mongo-indices
+docker compose exec mongo-indices mongosh --quiet
+```
+
+Dentro de `mongosh`:
+
+```javascript
+const c = db.getSiblingDB("curso_indices").ventas;
+c.countDocuments({})
+```
+
+Anota el volumen existente. Si la colección está vacía, completa antes la carga de las ventas ficticias.
+
+### Paso 2. Contar ventas de un estado
+
+```javascript
+c.countDocuments({estado:"pagada"})
+```
+
+Compara el resultado con el número total de documentos. Si hay 200.000 ventas y unas 50.000 están pagadas, el filtro selecciona alrededor de una cuarta parte de la colección. No es comparable a buscar un identificador que aparece una sola vez.
+
+### Paso 3. Revisar los índices disponibles
+
+```javascript
+c.getIndexes()
+```
+
+Comprueba que existe `ix_estado_fecha`, creado en la primera práctica por `03_crear_indices.js`. Si no existe, no estás trabajando en el estado de laboratorio esperado.
+
+### Paso 4. Medir una búsqueda con límite
+
+```javascript
+c.find({estado:"pagada"})
+ .limit(20)
+ .explain("executionStats")
+```
+
+Esta consulta pide **como máximo veinte resultados**, no todas las ventas pagadas. Examina las cifras reales. Un límite pequeño puede reducir el trabajo necesario, dependiendo de los accesos elegidos.
+
+### Paso 5. Medir una consulta sin límite
+
+```javascript
+c.find({estado:"pagada"})
+ .explain("executionStats")
+```
+
+Ahora pedimos todas las pagadas. Es posible que `nReturned` sea muy grande. Un índice no puede impedir que el usuario haya solicitado miles de documentos.
+
+No compares el tiempo de esta consulta con el paso anterior como si solamente hubieras cambiado el índice: **también eliminaste el límite** y cambiaste la cantidad de información solicitada.
+
+### Paso 6. Examinar el índice compuesto
+
+En una consulta controlada puedes pedir explícitamente:
+
+```javascript
+c.find({estado:"pagada"})
+ .hint("ix_estado_fecha")
+ .explain("executionStats")
+```
+
+La función `hint` sirve aquí para estudiar el índice, no como regla de configuración permanente. Observa cuántas claves y documentos se recorren para devolver todas las pagadas. Puede haber miles de lecturas: eso no es automáticamente un defecto, dado el tamaño del conjunto solicitado.
+
+### Paso 7. Formular una consulta más selectiva
+
+```javascript
+c.find({
+  estado:"pagada",
+  fecha:{$gte:ISODate("2025-10-01")}
+}).sort({fecha:-1}).limit(10).explain("executionStats")
+```
+
+Ahora combinamos estado, fecha y límite. La pregunta ya no es «devuelve todas las pagadas»: solicita solamente diez de las pagadas recientes. El índice compuesto puede ofrecer un acceso más ajustado.
+
+### Paso 8. Interpretar sin concluir demasiado
+
+Completa:
+
+| Consulta | Documentos devueltos | Documentos examinados | ¿Por qué? |
+|---|---:|---:|---|
+| Por número único | ____ | ____ | Alta selectividad |
+| Estado con límite 20 | ____ | ____ | Pocos resultados solicitados |
+| Todas las pagadas | ____ | ____ | Muchos resultados solicitados |
+| Estado y fecha con límite 10 | ____ | ____ | Filtro, ordenación y límite |
+
+**Conclusión que debes poder explicar:** que exista un índice útil no significa que cualquier consulta lea uno o dos documentos. El esfuerzo lógico depende también de la cantidad de resultados que se solicitan y de la selectividad de cada condición.
+
+### Evaluación
+
+Una persona afirma: «Mi consulta devuelve 50.000 ventas y examina 50.000; necesito que examine solo una». ¿Qué tiene de equivocado ese objetivo? Respuesta orientativa: la aplicación está solicitando miles de documentos completos; un índice no puede producirlos examinando un solo documento. Primero hay que analizar si la pantalla realmente necesita tantos resultados, si puede paginarlos y si el plan elegido evita candidatos innecesarios.
